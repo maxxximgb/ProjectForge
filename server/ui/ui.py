@@ -149,7 +149,7 @@ class CentralWidget(QWidget):
         self.show()
 
     def GetFreePort(self):
-        for port in ['18965', '09761', '5000', '27815']:
+        for port in ['18965', '21761', '5000', '27815']:
             if (check_host_busy(port)):
                 self.port.setText(f"Порт: {port}")
                 return port

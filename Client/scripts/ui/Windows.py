@@ -5,7 +5,7 @@ from scripts.db_mgr.db_mgr import find_active_servers
 from scripts.core.messaging.flask_app import run_flask
 from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QLabel, QHBoxLayout, \
-    QMainWindow, QDialog, QPushButton
+    QMainWindow, QDialog, QPushButton, QTableWidget, QTableView, QStackedLayout
 from threading import Thread
 
 from scripts.ui.other_classes import MenuCentralWidget, NoServerFound
@@ -69,6 +69,22 @@ class LoadingUI(QWidget):
         nsf.initui()
         nsf.finished.connect()
 
+class GantDiagramm(QWidget):
+    def __init__(self, project):
+        super().__init__()
+        self.project = project
+        self.insert_btn = QPushButton()
+        self.stackedlayout = QStackedLayout()
+        self.setLayout(self.stackedlayout)
+        self.buttonslayout = QHBoxLayout()
+        self.table = QTableWidget()
+
+    def init_ui(self):
+        self.setWindowTitle(f"Диаграмма Ганта для проекта {self.project["name"]}")
+        self.insert_btn.setFixedSize(30, 30)
+        self.stackedlayout.addChildLayout(self.buttonslayout)
+        self.stackedlayout.addWidget(self.table)
+        self.show()
 
 class MainMenu(QMainWindow):
     def __init__(self):
