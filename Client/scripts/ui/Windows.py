@@ -1,6 +1,8 @@
+import asyncio
 import os
 import time
-
+import asyncbg
+from qasync import asyncSlot
 from scripts.db_mgr.db_mgr import find_active_servers
 from scripts.core.messaging.flask_app import run_flask
 from PyQt6.QtCore import Qt, QSize, QTimer
@@ -25,7 +27,7 @@ class LoadingUI(QWidget):
         self.layout = QVBoxLayout(self)
         self.label = QLabel("Инициализация.", self)
         self.init_ui()
-        self.show()
+
 
     def init_ui(self):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -38,7 +40,8 @@ class LoadingUI(QWidget):
         self.bar.setValue(0)
         self.bar.resize(300, 30)
         self.resize(self.bar.size().width(), self.bar.size().height() + self.label.sizeHint().height())
-        self.launch_program()
+        self.show()
+        asyncio.ensure_future(self.launch_program())
 
     def change_tasks_count(self):
         self.cnt -= 1
@@ -46,28 +49,30 @@ class LoadingUI(QWidget):
         self.label.setText(f"Выполняется задач перед запуском: {self.cnt}")
         self.bar.setValue(self.percent)
 
-    def launch_program(self):
+    @asyncSlot()
+    async def launch_program(self):
         self.change_tasks_count()
-        QTimer.singleShot(1200, self.find_servers)
+        await self.find_servers()
 
     def finalize_launch(self):
         self.menu = MainMenu()
         self.menu.show()
         self.hide()
 
-    def find_servers(self):
+    @asyncSlot()
+    async def find_servers(self):
         host, port = 0, 0
         while host == 0 or port == 0:
-            host, port = find_active_servers()
+            host, port = await asyncbg.call_thread(find_active_servers)
             if host == 0 or port == 0:
-                self.unable_to_find_server()
-        QTimer.singleShot(1300, self.finalize_launch)
+                await self.unable_to_find_server()
+        self.finalize_launch()
         return 0
 
-    def unable_to_find_server(self):
+    @asyncSlot()
+    async def unable_to_find_server(self):
         nsf = NoServerFound()
         nsf.initui()
-        nsf.finished.connect()
 
 class GantDiagramm(QWidget):
     def __init__(self, project):
@@ -93,6 +98,7 @@ class MainMenu(QMainWindow):
         self.init_ui()
 
     def init_ui(self):
+        self.setWindowTitle("Панель управления")
         self.resize(QSize(1280, 720))
         self.setCentralWidget(self.central_widget)
         self.central_widget.show()

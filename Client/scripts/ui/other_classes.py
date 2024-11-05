@@ -75,6 +75,7 @@ class AddProjectWidget(QDialog):
 
 
     def initialize(self):
+        self.setWindowTitle("Добавить проект")
         self.formlayout.setSpacing(20)
         self.input_project_desc.setMaximumHeight(60)
         self.input_project_name.setPlaceholderText("Название")
