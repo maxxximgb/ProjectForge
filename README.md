@@ -26,4 +26,4 @@ build
 7. Готовое приложение будет находится в папке dist соответствующего собранного вами приложения.
 
 ## Ccылки
-[Техническое задание](https://drive.google.com/file/d/1228ewiIHi2A2qkSbr0gXxEK064GIZFSH/view)
+[Техническое задание](https://drive.google.com/file/d/1228ewiIHi2A2qkSbr0gXxEK064GIZFSH/view) [Пояснительная записка](example.com)
