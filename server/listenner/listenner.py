@@ -1,13 +1,29 @@
+import logging
 import os
 import socket
 import time
 import netifaces
+import requests
 from flask import Flask, jsonify, request
 from threading import Thread
 import sqlite3
+from flask import g
 
-app, port, connection, cursor = None, None, None, None
-newpr = ''' CREATE TABLE IF NOT EXISTS {name} ( ID INTEGER PRIMARY KEY AUTOINCREMENT, {name} TEXT NOT NULL , {maintainer} TEXT NOT NULL) '''
+app, port, connection, cursor, qapp = None, None, None, None, None
+pos2lvl = {"Директор": 4,
+           "Менеджер": 3,
+           "Рабочий": 2,
+           "Посетитель": 1}
+database = "database/database.sqlite"
+BigUsersList = []
+
+
+def get_db():
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(database)
+    return db
+
 
 def get_local_ip():
     try:
@@ -23,6 +39,7 @@ def get_local_ip():
         return str(e)
 
 
+
 def run_app(app, portik):
     global port
     port = portik
@@ -32,6 +49,7 @@ def run_app(app, portik):
     app_thr.start()
     resp_thr.start()
     return 0
+
 
 def listen_and_respond():
     global port
@@ -47,40 +65,211 @@ def listen_and_respond():
             sock.sendto(response.encode('utf-8'), addr)
 
 
+def share(pyqt_app):
+    global qapp
+    qapp = pyqt_app
+
+
+def ForceCreateProject(username, projectname, status):
+    with app.app_context():
+        connection = get_db()
+        cursor = connection.cursor()
+        logging.info(f"Пользователь {username} создает проект.")
+        cursor.execute('''
+            INSERT INTO Projects (ProjectName, CreatorID, Status)
+            VALUES (?, ?, ?)
+        ''', (projectname, username, status))
+        connection.commit()
+
+def get_waiting_directors():
+    with app.app_context():
+        conn = get_db()
+        cursor=conn.cursor()
+        cursor.execute('''
+            SELECT * FROM Users
+            WHERE Position = 'Директор' AND Status = 'waiting'
+        ''')
+        waitingdirectors = cursor.fetchall()
+    return waitingdirectors
+
+
 def create_routes(app):
     @app.route("/newproject", methods=["POST"])
     def create_project():
         data = request.json
-        name = data.get("name")
-        maintainer = data.get("maintainer")
-        if not name or not maintainer:
-            return jsonify(message="Отправлены неверные данные"), 403
-        cmd = newpr.format(name = name, maintainer = maintainer)
-        cursor.execute(cmd)
-        connection.commit(cursor)
-        return jsonify(message="Таблица '{name}' успешно создана.".format(name)), 200
-    
-    @app.route("/authuser", methods = ["POST"])
+        username = data.get('username')
+        connection = get_db()
+        cursor = connection.cursor()
+        cursor.execute('''
+        SELECT Position FROM Users WHERE SystemLogin = ?
+        ''', (username))
+        userpos = cursor.fetchone()
+        if pos2lvl[userpos] > 2:
+            ForceCreateProject(username, data.get('name'), 'approved')
+            return "OK", 200
+        elif pos2lvl[userpos] == 2:
+            js = {'name': data.get('name'),
+                  'pos': userpos,
+                  'projectname': data.get('projectname')}
+            [requests.post(ip, json=js) for ip in BigUsersList]
+            return "Wait for senior", 200
+        else:
+            return "Permission Denied", 403
+
+    @app.route("/get_project_senior_stat", methods=["GET"])
+    def check_senior():
+        connection = get_db()
+        cursor = connection.cursor()
+        data = request.json
+        username = data.get('username')
+        cursor.execute('SELECT Status FROM Projects WHERE ProjectName = ?', (username))
+        status = cursor.fetchone()
+        if status == 'approved':
+            return 'Approved', 200
+        else:
+            return 'Not approved', 403
+
+    @app.route("/userstatus", methods=["GET"])
+    def get_userstatus():
+        username = request.json.get('name')
+        connection = get_db()
+        cursor = connection.cursor()
+        cursor.execute('''
+            SELECT Status FROM Users WHERE SystemLogin = ?
+        ''', (username,))
+
+        status = cursor.fetchone()[0]
+        print(status)
+        if status == 'waiting':
+            logging.info(f"{username} статус отправлен: {status[0]}")
+            print(f"Status: {status[0]}")
+            return status[0], 403
+        elif status == 'approved':
+            return status[0], 200
+        else:
+            return 'Registration Denied', 404
+
+
+    @app.route("/authuser", methods=["POST"])
     def auth_user():
         data = request.json
-        #TODO авторизировать пользователя
-    
-    @app.route("/newuser", methods = ["POST"])
+        password = data.get('password')
+
+    @app.route("/newuser", methods=["POST"])
     def reg_user():
+        global pos2lvl
         data = request.json
-        #TODO зарегать пользователя
+        username = data.get('login')
+        userpos = data.get('pos')
+        userpassword = data.get('password')
+        name = data.get('name')
+        connection = get_db()
+        cursor = connection.cursor()
+        cursor.execute('''
+                    SELECT COUNT(*) FROM Users WHERE SystemLogin = ?
+                ''', (username,))
+        is_registered = int(cursor.fetchone()[0]) > 0
+        if is_registered: return "User id already registered", 403
+        cursor.execute('''
+            INSERT INTO Users (Name, Password, Status, Position, SystemLogin)
+            VALUES (?, ?, 'waiting', ?, ?)
+        ''', (name, userpassword, userpos, username))
+        connection.commit()
+
+
+        if pos2lvl[userpos] == 4:
+            logging.info(f"Пользователь {username} запрашивает регистрацию как директор.")
+            qapp.RequestRegister4Director()
+            logging.info(f"Пользователь {username} успешно регистрируется как директор.")
+        elif pos2lvl[userpos] == 2 or pos2lvl[userpos] == 3:
+            #TODO запрос регистрации у директора и менеджера
+            pass
+        return "WaitForStatus", 200
 
     @app.route("/ping", methods=["GET"])
     def ping():
+        userpos = request.json.get('userpos')
+        if pos2lvl[userpos] >= 3:
+            BigUsersList.append(request.remote_addr)
         return "OK"
+
+    @app.teardown_appcontext
+    def close_connection(exception):
+        db = getattr(g, '_database', None)
+        if db is not None:
+            db.close()
+
+def accept_director(login):
+    global app
+    with app.app_context():
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE Users SET Status = ? WHERE SystemLogin = ?
+        ''', ('approved', login))
+        conn.commit()
+
+def decline_director(login):
+    global app
+    with app.app_context():
+        connection = get_db()
+        cursor = connection.cursor()
+
+        cursor.execute('''
+        SELECT UserID FROM Users WHERE SystemLogin = ?
+        ''', (login,))
+
+        ID = cursor.fetchone()
+
+        cursor.execute('''
+        DELETE FROM UserProjects
+        WHERE SystemLogin = ?
+        ''', (login,))
+
+        cursor.execute('''
+        DELETE FROM Users
+        WHERE UserID = ?
+        ''', (ID,))
+
+        connection.commit()
 
 def create_app():
     global host, port, app, cursor, connection
     if not os.path.exists("database"):
         os.mkdir("database")
-    connection = sqlite3.connect("database/database.sqlite")
-    cursor = connection.cursor()
     app = Flask("ServerListenner")
+    with app.app_context():
+        connection = get_db()
+        cursor = connection.cursor()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Users (
+            UserID       INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name         TEXT    NOT NULL,
+            Password     TEXT    NOT NULL,
+            Status       TEXT    NOT NULL,
+            Position     TEXT    NOT NULL,
+            SystemLogin  TEXT    NOT NULL,
+            UserProjects         REFERENCES UserProjects (UserID) 
+        );
+        ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Projects (
+            ProjectID INTEGER PRIMARY KEY AUTOINCREMENT,
+            ProjectName TEXT NOT NULL,
+            CreatorID INTEGER NOT NULL,
+            Status TEXT NOT NULL,
+            FOREIGN KEY (CreatorID) REFERENCES Users(UserID)
+        );
+        ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS UserProjects (
+            UserID INTEGER,
+            ProjectID INTEGER,
+            PRIMARY KEY (UserID, ProjectID),
+            FOREIGN KEY (UserID) REFERENCES Users(UserID),
+            FOREIGN KEY (ProjectID) REFERENCES Projects(ProjectID)
+        )
+        ''')
+        connection.commit()
+
     return app
-
-

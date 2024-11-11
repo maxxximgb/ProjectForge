@@ -1,5 +1,5 @@
 import asyncio
-from scripts.ui.Windows import LoadingUI
+from Client.scripts.ui.Windows import LoadingUI
 import sys
 from  PyQt6.QtWidgets import QApplication
 from qasync import QEventLoop
@@ -10,4 +10,6 @@ def main():
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
     ui = LoadingUI()
-    app.exec()
+    with loop:
+        loop.run_forever()
+

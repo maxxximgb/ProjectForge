@@ -2,16 +2,13 @@ import asyncio
 import os
 import time
 import asyncbg
-from qasync import asyncSlot
-from scripts.db_mgr.db_mgr import find_active_servers
-from scripts.core.messaging.flask_app import run_flask
-from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QLabel, QHBoxLayout, \
-    QMainWindow, QDialog, QPushButton, QTableWidget, QTableView, QStackedLayout
-from threading import Thread
-
-from scripts.ui.other_classes import MenuCentralWidget, NoServerFound
-
+import requests
+from qasync import asyncSlot, QEventLoop
+from Client.scripts.db_mgr.db_mgr import find_active_servers
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QLabel, QHBoxLayout, QMainWindow, \
+    QMessageBox
+from Client.scripts.ui.other_classes import MenuCentralWidget, NoServerFound, AuthWidget
 
 
 class LoadingUI(QWidget):
@@ -28,6 +25,9 @@ class LoadingUI(QWidget):
         self.label = QLabel("Инициализация.", self)
         self.init_ui()
 
+    def authorize_user(self, host, port):
+        aw = AuthWidget(host, port, self)
+        aw.initialize()
 
     def init_ui(self):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -35,7 +35,7 @@ class LoadingUI(QWidget):
         self.h_layout.addWidget(self.label)
         self.layout.addWidget(self.bar)
         self.layout.addLayout(self.h_layout)
-        self.setFixedSize(QSize(self.screen.size().width() // 7 - 20,self.screen.size().height()  // 10))
+        self.setFixedSize(QSize(self.screen.size().width() // 5 - 20, self.screen.size().height() // 10))
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.bar.setValue(0)
         self.bar.resize(300, 30)
@@ -48,16 +48,14 @@ class LoadingUI(QWidget):
         self.percent += 30
         self.label.setText(f"Выполняется задач перед запуском: {self.cnt}")
         self.bar.setValue(self.percent)
+        if self.cnt == 0:
+            menu = MainMenu()
+            menu.show()
 
     @asyncSlot()
     async def launch_program(self):
         self.change_tasks_count()
         await self.find_servers()
-
-    def finalize_launch(self):
-        self.menu = MainMenu()
-        self.menu.show()
-        self.hide()
 
     @asyncSlot()
     async def find_servers(self):
@@ -66,30 +64,67 @@ class LoadingUI(QWidget):
             host, port = await asyncbg.call_thread(find_active_servers)
             if host == 0 or port == 0:
                 await self.unable_to_find_server()
-        self.finalize_launch()
+        self.change_tasks_count()
+        self.authorize_user(host, port)
         return 0
+
+    @asyncSlot()
+    async def checkStatus(self, login, host, port):
+        r = requests.get(f"http://{host}:{port}/userstatus", json={"name": login})
+        if r.status_code == 403:
+            return 403
+        elif r.status_code == 200:
+            return 200
+        else:
+            return 404
+
+    @asyncSlot()
+    async def wait_for_server(self, host, port, login):
+        t = 0
+        while True:
+            try:
+                s = await self.checkStatus(login, host, port)
+            except:
+                mbox = QMessageBox()
+                mbox.setText("Сервер не отвечает на запросы клиента. Обратитесь к системному администратору с просьбой перезапустить его.")
+                mbox.setIcon(QMessageBox.Icon.Critical)
+                mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
+                mbox.setWindowTitle("Сервер не отвечвает")
+                mbox.finished.connect(os.abort)
+                mbox.exec()
+            self.label.setText(f"Ожидание ответа от сервера. Запросов выполнено: {t}")
+            if s == 500:
+                mbox = QMessageBox()
+                mbox.setText("На сервере произошла ошибка, пожалуйста, обратитесь к системному администратору за помощью.")
+                mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
+                mbox.setIcon(QMessageBox.Icon.Critical)
+                mbox.setWindowTitle("Ошибка сервера")
+                mbox.show()
+                mbox.finished().connect(os.abort)
+            elif s == 404:
+                mbox = QMessageBox()
+                mbox.setText("Ваш запрос на регистрацию отклонен.")
+                mbox.setIcon(QMessageBox.Icon.Warning)
+                mbox.setWindowTitle("Запрос отклонен.")
+                mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
+                mbox.show()
+                mbox.finished().connect(self.registration_denied)
+            elif s == 200:
+                print("OK")
+                break
+            else:
+                await asyncio.sleep(4)
+                t += 1
+
+    def registration_denied(self):
+        os.remove("data")
+        os.abort()
 
     @asyncSlot()
     async def unable_to_find_server(self):
         nsf = NoServerFound()
         nsf.initui()
 
-class GantDiagramm(QWidget):
-    def __init__(self, project):
-        super().__init__()
-        self.project = project
-        self.insert_btn = QPushButton()
-        self.stackedlayout = QStackedLayout()
-        self.setLayout(self.stackedlayout)
-        self.buttonslayout = QHBoxLayout()
-        self.table = QTableWidget()
-
-    def init_ui(self):
-        self.setWindowTitle(f"Диаграмма Ганта для проекта {self.project["name"]}")
-        self.insert_btn.setFixedSize(30, 30)
-        self.stackedlayout.addChildLayout(self.buttonslayout)
-        self.stackedlayout.addWidget(self.table)
-        self.show()
 
 class MainMenu(QMainWindow):
     def __init__(self):
@@ -101,4 +136,3 @@ class MainMenu(QMainWindow):
         self.setWindowTitle("Панель управления")
         self.resize(QSize(1280, 720))
         self.setCentralWidget(self.central_widget)
-        self.central_widget.show()
