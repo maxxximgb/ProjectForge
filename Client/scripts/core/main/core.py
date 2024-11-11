@@ -12,4 +12,3 @@ def main():
     ui = LoadingUI()
     with loop:
         loop.run_forever()
-

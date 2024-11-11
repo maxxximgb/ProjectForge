@@ -15,7 +15,12 @@ pos2lvl = {"Директор": 4,
            "Рабочий": 2,
            "Посетитель": 1}
 database = "database/database.sqlite"
-BigUsersList = []
+user_ip_by_pos = {
+    "Директор": [],
+    "Менеджер": [],
+    "Рабочий": [],
+    "Посетитель": []
+}
 
 
 def get_db():
@@ -94,66 +99,56 @@ def get_waiting_directors():
 
 
 def create_routes(app):
-    @app.route("/newproject", methods=["POST"])
-    def create_project():
-        data = request.json
-        username = data.get('username')
-        connection = get_db()
-        cursor = connection.cursor()
-        cursor.execute('''
-        SELECT Position FROM Users WHERE SystemLogin = ?
-        ''', (username))
-        userpos = cursor.fetchone()
-        if pos2lvl[userpos] > 2:
-            ForceCreateProject(username, data.get('name'), 'approved')
-            return "OK", 200
-        elif pos2lvl[userpos] == 2:
-            js = {'name': data.get('name'),
-                  'pos': userpos,
-                  'projectname': data.get('projectname')}
-            [requests.post(ip, json=js) for ip in BigUsersList]
-            return "Wait for senior", 200
-        else:
-            return "Permission Denied", 403
-
-    @app.route("/get_project_senior_stat", methods=["GET"])
-    def check_senior():
-        connection = get_db()
-        cursor = connection.cursor()
-        data = request.json
-        username = data.get('username')
-        cursor.execute('SELECT Status FROM Projects WHERE ProjectName = ?', (username))
-        status = cursor.fetchone()
-        if status == 'approved':
-            return 'Approved', 200
-        else:
-            return 'Not approved', 403
-
     @app.route("/userstatus", methods=["GET"])
     def get_userstatus():
         username = request.json.get('name')
         connection = get_db()
         cursor = connection.cursor()
         cursor.execute('''
-            SELECT Status FROM Users WHERE SystemLogin = ?
+            SELECT Status, Position FROM Users WHERE SystemLogin = ?
         ''', (username,))
 
-        status = cursor.fetchone()[0]
-        print(status)
+        status, position = cursor.fetchone()
+        logging.info(f"{username} статус отправлен: {status[0]}")
         if status == 'waiting':
-            logging.info(f"{username} статус отправлен: {status[0]}")
-            print(f"Status: {status[0]}")
             return status[0], 403
         elif status == 'approved':
+            global user_ip_by_pos
+            logging.info(f"{position} {username} добавлен в список IP адресов")
+            user_ip_by_pos[position].append(request.remote_addr)
             return status[0], 200
         else:
             return 'Registration Denied', 404
 
+    @app.route("/shutdown", methods=["POST"])
+    def shutdown():
+        ip = request.remote_addr
+        pos = request.json.get("position")
+        global user_ip_by_pos
+        user_ip_by_pos[pos].remove(ip)
+        logging.info(f"{pos} с IPv4 адресом {ip} был удален.")
 
     @app.route("/authuser", methods=["POST"])
     def auth_user():
         data = request.json
         password = data.get('password')
+        login = data.get('login')
+        connection = get_db()
+        cursor = connection.cursor()
+        cursor.execute('''
+            SELECT Password, Status, Position FROM Users WHERE SystemLogin = ?
+        ''', (login,))
+        try:
+            pwd, status, position = cursor.fetchone()
+        except:
+            return "Not found", 404
+        if pwd == password and status != 'waiting':
+            return position, 200
+        elif pwd != password:
+            return "Incorrect password", 403
+        elif status == "waiting":
+            return "You are not approved", 403
+
 
     @app.route("/newuser", methods=["POST"])
     def reg_user():
@@ -189,8 +184,6 @@ def create_routes(app):
     @app.route("/ping", methods=["GET"])
     def ping():
         userpos = request.json.get('userpos')
-        if pos2lvl[userpos] >= 3:
-            BigUsersList.append(request.remote_addr)
         return "OK"
 
     @app.teardown_appcontext
@@ -219,12 +212,12 @@ def decline_director(login):
         SELECT UserID FROM Users WHERE SystemLogin = ?
         ''', (login,))
 
-        ID = cursor.fetchone()
+        ID = cursor.fetchone()[0]
 
         cursor.execute('''
         DELETE FROM UserProjects
-        WHERE SystemLogin = ?
-        ''', (login,))
+        WHERE UserID = ?
+        ''', (ID,))
 
         cursor.execute('''
         DELETE FROM Users

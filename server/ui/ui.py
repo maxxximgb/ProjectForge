@@ -14,18 +14,23 @@ import pkg_resources
 
 sv = None
 
+
 def add_to_startup():
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, winreg.KEY_SET_VALUE)
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                         winreg.KEY_SET_VALUE)
     winreg.SetValueEx(key, "ProjectManagerServer", 0, winreg.REG_SZ, sys.executable)
     winreg.CloseKey(key)
 
+
 def remove_from_startup():
-    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, winreg.KEY_SET_VALUE)
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                         winreg.KEY_SET_VALUE)
     try:
         winreg.DeleteValue(key, "YourAppName")
     except FileNotFoundError:
         pass
     winreg.CloseKey(key)
+
 
 def resource_path(relative_path):
     try:
@@ -35,19 +40,19 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+
 class Server(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.tray = None
         global sv
         sv = self
         share(self)
         self.messagebox = None
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon(resource_path("images/icon.png")))
-
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
         self.init_ui()
-
 
     def closeEvent(self, event):
         os.abort()
@@ -55,6 +60,7 @@ class Server(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self.tray_icon.setVisible(False)
+        self.tray = False
 
     def init_ui(self):
         if not os.path.exists("conf/app.conf"):
@@ -65,10 +71,10 @@ class Server(QMainWindow):
             self.run_server()
 
     def minimize_to_tray(self):
+        self.tray = True
         self.hide()
         self.tray_icon.setVisible(True)
         self.tray_icon.showMessage("Внимание", "Сервер свернут в трей.", QSystemTrayIcon.MessageIcon.Warning, 5000)
-
 
     def create_tray_icon_menu(self):
         menu = QMenu()
@@ -79,8 +85,9 @@ class Server(QMainWindow):
         self.tray_icon.setContextMenu(menu)
 
     def RequestRegister4Director(self):
+        self.tray_icon.showMessage("Внимание", "Пользователь запрашивает регистрацию.",
+                                   QSystemTrayIcon.MessageIcon.Information, 2000)
         self.cw.addDirectorCnt()
-
 
     def configure_server(self, is_error):
         self.messagebox = QMessageBox()
@@ -104,7 +111,9 @@ class Server(QMainWindow):
         self.configure_widget.finished.connect(self.force_restart_app)
 
     def force_restart_app(self):
+
         self.restart_messagebox = QMessageBox(text='Перезапустите приложение для применения изменений')
+        self.restart_messagebox.setWindowTitle("Внимание!")
         self.restart_messagebox.show()
         self.restart_messagebox.finished.connect(os.abort)
 
@@ -118,7 +127,6 @@ class Server(QMainWindow):
             self.minimize_to_tray()
         else:
             self.show()
-
 
     def on_tray_icon_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -164,7 +172,6 @@ class ConfigureServer(QDialog):
             self.apply_settings()
             self.close()
 
-
     def apply_settings(self):
         with open("conf/app.conf", "r") as f:
             settings = f.read().split()
@@ -182,6 +189,7 @@ class ConfigureServer(QDialog):
             add_to_startup()
         else:
             remove_from_startup()
+
 
 class WaitingDirectors(QDialog):
     def __init__(self, cw):
@@ -238,21 +246,23 @@ class WaitingDirectors(QDialog):
         dname = director[1]
         dlogin = director[5]
         dpos = director[4]
-
         director_widget = QWidget()
         director_layout = QHBoxLayout(director_widget)
         text_layout = QVBoxLayout()
         text_layout.addWidget(QLabel(dpos))
         text_layout.addWidget(QLabel(f"ФИО: {dname}"))
         text_layout.addWidget(QLabel(f"Логин: {dlogin}"))
+        button_layout = QVBoxLayout()
         accept_button = QPushButton("Принять")
         decline_button = QPushButton("Отклонить")
         decline_button.setFixedWidth(100)
         accept_button.setFixedWidth(100)
         accept_button.clicked.connect(lambda _, d=director: self.accept_director(d))
         decline_button.clicked.connect(lambda _, d=director: self.decline_director(d))
+        button_layout.addWidget(accept_button)
+        button_layout.addWidget(decline_button)
         director_layout.addLayout(text_layout)
-        director_layout.addWidget(accept_button)
+        director_layout.addLayout(button_layout)
         self.scroll_layout.addWidget(director_widget)
 
     def accept_director(self, director):
@@ -275,10 +285,8 @@ class WaitingDirectors(QDialog):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
-
         for director in self.waitingdirectors:
             self.add_director_widget(director)
-
         if not self.waitingdirectors:
             self.close()
         self.update_window_size()
@@ -286,7 +294,6 @@ class WaitingDirectors(QDialog):
     def update_window_size(self):
         director_widget_height = 100
         total_height = len(self.waitingdirectors) * director_widget_height
-
         min_height = 130
         max_height = 250
 
@@ -296,6 +303,10 @@ class WaitingDirectors(QDialog):
             self.resize(self.width(), max_height)
         else:
             self.resize(self.width(), total_height)
+
+
+def change_cfg():
+    sv.configure_server("ChangeConf")
 
 
 class CentralWidget(QWidget):
@@ -348,7 +359,7 @@ class CentralWidget(QWidget):
         self.addDirectors.setText("Просмотреть")
         self.edit_cfg_btn.setText("Изменить конфигурацию приложения")
         self.minimize_btn.setText("Свернуть сервер в трей")
-        self.edit_cfg_btn.clicked.connect(self.change_cfg)
+        self.edit_cfg_btn.clicked.connect(change_cfg)
         self.minimize_btn.clicked.connect(sv.minimize_to_tray)
         port = self.GetFreePort()
         run_app(self.app, port)
@@ -369,9 +380,6 @@ class CentralWidget(QWidget):
                 self.port.setText(f"Порт: {port}")
                 return port
 
-    def change_cfg(self):
-        sv.configure_server("ChangeConf")
-
     def addDirectorCnt(self, cnt=1):
         self.wd += cnt
         self.waiting_directors_cnt.setText(f"Ожидают регистрации: {self.wd}")
@@ -379,7 +387,6 @@ class CentralWidget(QWidget):
             self.addDirectors.show()
         else:
             self.addDirectors.hide()
-
 
 
 def is_valid_ip(ip):

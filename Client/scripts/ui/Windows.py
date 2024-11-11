@@ -3,6 +3,7 @@ import os
 import time
 import asyncbg
 import requests
+from flask import request
 from qasync import asyncSlot, QEventLoop
 from Client.scripts.db_mgr.db_mgr import find_active_servers
 from PyQt6.QtCore import Qt, QSize
@@ -14,6 +15,9 @@ from Client.scripts.ui.other_classes import MenuCentralWidget, NoServerFound, Au
 class LoadingUI(QWidget):
     def __init__(self):
         super().__init__()
+        self.position = None
+        self.port = None
+        self.host = None
         self.percent = 0
         self.cnt = 3
         self.screen = QApplication.primaryScreen()
@@ -49,8 +53,9 @@ class LoadingUI(QWidget):
         self.label.setText(f"Выполняется задач перед запуском: {self.cnt}")
         self.bar.setValue(self.percent)
         if self.cnt == 0:
-            menu = MainMenu()
-            menu.show()
+            self.menu = MainMenu(self.host, self.port, self.position)
+            self.menu.show()
+            self.close()
 
     @asyncSlot()
     async def launch_program(self):
@@ -65,6 +70,7 @@ class LoadingUI(QWidget):
             if host == 0 or port == 0:
                 await self.unable_to_find_server()
         self.change_tasks_count()
+        self.host, self.port = host, port
         self.authorize_user(host, port)
         return 0
 
@@ -74,6 +80,7 @@ class LoadingUI(QWidget):
         if r.status_code == 403:
             return 403
         elif r.status_code == 200:
+            self.position = r.text
             return 200
         else:
             return 404
@@ -99,18 +106,20 @@ class LoadingUI(QWidget):
                 mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
                 mbox.setIcon(QMessageBox.Icon.Critical)
                 mbox.setWindowTitle("Ошибка сервера")
-                mbox.show()
-                mbox.finished().connect(os.abort)
+                mbox.finished.connect(os.abort)
+                mbox.exec()
+
             elif s == 404:
                 mbox = QMessageBox()
                 mbox.setText("Ваш запрос на регистрацию отклонен.")
                 mbox.setIcon(QMessageBox.Icon.Warning)
                 mbox.setWindowTitle("Запрос отклонен.")
                 mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
-                mbox.show()
-                mbox.finished().connect(self.registration_denied)
+                mbox.finished.connect(self.registration_denied)
+                mbox.exec()
+
             elif s == 200:
-                print("OK")
+                self.change_tasks_count()
                 break
             else:
                 await asyncio.sleep(4)
@@ -127,12 +136,20 @@ class LoadingUI(QWidget):
 
 
 class MainMenu(QMainWindow):
-    def __init__(self):
+    def __init__(self, host, port, position):
         super().__init__()
         self.central_widget = MenuCentralWidget()
         self.init_ui()
+        self.host = host
+        self.position = position
+        self.port = port
+
+    def closeEvent(self, a0):
+        requests.post(f"http://{self.host}:{self.port}/shutdown", data={"position": self.position})
+        a0.accept()
 
     def init_ui(self):
         self.setWindowTitle("Панель управления")
         self.resize(QSize(1280, 720))
         self.setCentralWidget(self.central_widget)
+        self.show()

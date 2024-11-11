@@ -7,7 +7,7 @@ from threading import Thread
 import asyncbg
 import requests
 from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer
-from PyQt6.QtGui import QFont, QTextFrame
+from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent
 from PyQt6 import QtGui, QtCore
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QWidget, QLabel, QGridLayout, QSizePolicy, QSpacerItem, QLineEdit, \
     QHBoxLayout, QFormLayout, QDialog, QTextEdit, QMessageBox, QCheckBox, QComboBox
@@ -88,7 +88,7 @@ auth_ss = """
                 color: #005a9e;
             }
         """
-
+userpos = None
 
 class AddProjectBtn(QVBoxLayout):
     def __init__(self):
@@ -200,7 +200,6 @@ class MenuCentralWidget(QWidget):
         self.cur_col = 0
         self.cur_row = 0
         self.setLayout(self.layout)
-        # TODO подключиться к бд и проверить есть ли проекты
         self.no_project_exsist()
 
     def add_project(self, project):
@@ -242,7 +241,6 @@ class NoServerFound(QDialog):
         retry.clicked.connect(self.close)
         close.clicked.connect(os.abort)
         self.exec()
-
 
 
 class AuthWidget(QDialog):
@@ -287,17 +285,76 @@ class AuthWidget(QDialog):
         self.show_password_checkbox.setText("Показать пароль")
         self.show_password_checkbox.stateChanged.connect(self.toggle_password_visibility)
         if not os.path.exists('data/user.dat'):
-            self.mbox = QMessageBox()
-            self.mbox.setText("Не найдены сохраненные пользователи. Необходимо войти.")
-            self.mbox.setWindowTitle("Нет сохраненных пользователей")
-            self.mbox.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            self.mbox.button(QMessageBox.StandardButton.Yes).setText("Вход")
-            self.mbox.button(QMessageBox.StandardButton.No).setText("Регистрация")
-            self.mbox.buttonClicked.connect(self.handle_button_click)
-            self.mbox.exec()
+            self.show_reg_mbox()
         else:
-            # TODO авто авторизация
-            pass
+            try:
+                with open('data/user.dat', 'r') as f:
+                    d = f.read()
+                    if d:
+                        auth = self.check_auth(d.split())
+                        if auth == 0:
+                            asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, d.split()[1]))
+                            self.close()
+                            f.close()
+                            return 0
+            except:
+                os.remove('data/user.dat')
+                mbox = QMessageBox()
+                mbox.setIcon(QMessageBox.Icon.Critical)
+                mbox.setText("Файл user.dat был изменен, неоходима повторная авторизация.")
+                mbox.exec()
+                os.abort()
+
+    def check_auth(self, d):
+        password, login = d
+        data = {"password": password,
+                "login": login}
+        r = requests.post(f"http://{self.shost}:{self.sport}/authuser", json=data)
+        if r.status_code == 403 or r.status_code == 404:
+            mbox = QMessageBox()
+            mbox.setIcon(QMessageBox.Icon.Critical)
+            mbox.setWindowTitle("Статус авторизации")
+            if r.text == "Incorrect password" or r.status_code == 404:
+                mbox.setText(
+                    "Похоже ваш аккаунт удален в системе или файл user.dat был изменен. Авторизируйтесь еще раз.")
+                mbox.setStandardButtons(
+                    QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Close)
+                ans = mbox.exec()
+                if ans == QMessageBox.StandardButton.Ok:
+                    self.show_reg_mbox()
+                else:
+                    os.abort()
+            elif r.text == "You are not approved":
+                mbox.setText(
+                    "Ваш запрос не регистрацию все еще ожидает ответа от администратора. Пожалуйста, подождите пока его одобрят. Стоит ли автоматически открыть программу при получении ответа?")
+                mbox.setStandardButtons(
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                ans = mbox.exec()
+                if ans == QMessageBox.StandardButton.Yes:
+                    self.close()
+                    asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, login))
+                    return 0
+                else:
+                    os.abort()
+        else:
+            return 0
+
+    def show_reg_mbox(self):
+        self.mbox = QMessageBox()
+        self.mbox.setText("Выберите действие.")
+        self.mbox.setWindowTitle("Авторизация")
+        self.mbox.closeEvent = self.mboxcloseevent
+        self.mbox.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        self.mbox.button(QMessageBox.StandardButton.Yes).setText("Вход")
+        self.mbox.button(QMessageBox.StandardButton.No).setText("Регистрация")
+        self.mbox.buttonClicked.connect(self.handle_button_click)
+        self.mbox.exec()
+
+    def mboxcloseevent(self, event: QCloseEvent):
+        if event.spontaneous():
+            os.abort()
+        else:
+            event.accept()
 
     def toggle_password_visibility(self, state):
         if state == Qt.CheckState.Checked.value:
@@ -333,8 +390,7 @@ class AuthWidget(QDialog):
                                            self.qbox.currentText()))
 
     def validate_and_send(self, datatype, login, password, name='', position=''):
-
-        if not self.validate_inputs():
+        if not self.validate_inputs(datatype):
             self.fio.textChanged.connect(self.validate_inputs)
             self.password_input.textChanged.connect(self.validate_inputs)
             self.uname_input.textChanged.connect(self.validate_inputs)
@@ -374,27 +430,32 @@ class AuthWidget(QDialog):
                 else:
                     os.abort()
         else:
-            data = {
-                "password": password,
-                "login": login
-            }
-            r = requests.post(f"http://{self.shost}:{self.sport}/authuser", json=data)
-            print(r.text)
+            auth = self.check_auth([password, login])
+            if auth == 0:
+                self.save_data(password, login)
+                self.close()
+                asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, login))
+                return 0
 
     def save_data(self, password, login):
         if not os.path.exists('data'): os.mkdir('data')
         with open('data/user.dat', 'w') as f:
             f.write(f"{password} {login}")
 
-
-
-    def validate_inputs(self):
+    def validate_inputs(self, datatype):
         valid = True
-        if self.fio.text():
-            self.fio.setStyleSheet("")
-        else:
-            self.fio.setStyleSheet("border: 1px solid red;")
-            valid = False
+        if datatype == "register":
+            if self.fio.text():
+                self.fio.setStyleSheet("")
+            else:
+                self.fio.setStyleSheet("border: 1px solid red;")
+                valid = False
+            if self.qbox.isVisible() and not self.qbox.currentText():
+                self.qbox.setStyleSheet("border: 1px solid red;")
+                valid = False
+            else:
+                self.qbox.setStyleSheet("")
+
         if not self.uname_input.text():
             self.uname_input.setStyleSheet("border: 1px solid red;")
             valid = False
@@ -405,10 +466,6 @@ class AuthWidget(QDialog):
             valid = False
         else:
             self.password_input.setStyleSheet("")
-        if self.qbox.isVisible() and not self.qbox.currentText():
-            self.qbox.setStyleSheet("border: 1px solid red;")
-            valid = False
-        else:
-            self.qbox.setStyleSheet("")
+
 
         return valid
