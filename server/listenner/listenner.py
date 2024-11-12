@@ -1,10 +1,11 @@
+import json
 import logging
 import os
 import socket
 import time
 import netifaces
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from threading import Thread
 import sqlite3
 from flask import g
@@ -15,7 +16,7 @@ pos2lvl = {"Директор": 4,
            "Рабочий": 2,
            "Посетитель": 1}
 database = "database/database.sqlite"
-user_ip_by_pos = {
+users_by_pos = {
     "Директор": [],
     "Менеджер": [],
     "Рабочий": [],
@@ -105,18 +106,19 @@ def create_routes(app):
         connection = get_db()
         cursor = connection.cursor()
         cursor.execute('''
-            SELECT Status, Position FROM Users WHERE SystemLogin = ?
+            SELECT Status, Position, Name FROM Users WHERE SystemLogin = ?
         ''', (username,))
 
-        status, position = cursor.fetchone()
-        logging.info(f"{username} статус отправлен: {status[0]}")
+        status, position, name = cursor.fetchone()
+        logging.info(f"{username} статус отправлен: {status}")
         if status == 'waiting':
-            return status[0], 403
+            return status, 403
         elif status == 'approved':
-            global user_ip_by_pos
+            global users_by_pos
+            userdata = {"name": name, "ip": request.remote_addr, "status": status}
             logging.info(f"{position} {username} добавлен в список IP адресов")
-            user_ip_by_pos[position].append(request.remote_addr)
-            return status[0], 200
+            users_by_pos[position].append(userdata)
+            return position, 200
         else:
             return 'Registration Denied', 404
 
@@ -171,20 +173,22 @@ def create_routes(app):
         ''', (name, userpassword, userpos, username))
         connection.commit()
 
-
         if pos2lvl[userpos] == 4:
             logging.info(f"Пользователь {username} запрашивает регистрацию как директор.")
             qapp.RequestRegister4Director()
             logging.info(f"Пользователь {username} успешно регистрируется как директор.")
         elif pos2lvl[userpos] == 2 or pos2lvl[userpos] == 3:
-            #TODO запрос регистрации у директора и менеджера
             pass
         return "WaitForStatus", 200
 
     @app.route("/ping", methods=["GET"])
     def ping():
-        userpos = request.json.get('userpos')
         return "OK"
+
+    @app.route("/user", methods=["GET"])
+    def send_users():
+        global users_by_pos
+        return Response(json.dumps(users_by_pos, ensure_ascii=False), content_type='application/json; charset=utf-8')
 
     @app.teardown_appcontext
     def close_connection(exception):
@@ -249,6 +253,7 @@ def create_app():
         CREATE TABLE IF NOT EXISTS Projects (
             ProjectID INTEGER PRIMARY KEY AUTOINCREMENT,
             ProjectName TEXT NOT NULL,
+            ProjectDesc TEXT NOT NULL,
             CreatorID INTEGER NOT NULL,
             Status TEXT NOT NULL,
             FOREIGN KEY (CreatorID) REFERENCES Users(UserID)

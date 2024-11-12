@@ -1,25 +1,13 @@
 import asyncio
-import hashlib
 import os.path
-import threading
-from threading import Thread
-
-import asyncbg
 import requests
 from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer
 from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent
-from PyQt6 import QtGui, QtCore
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QWidget, QLabel, QGridLayout, QSizePolicy, QSpacerItem, QLineEdit, \
     QHBoxLayout, QFormLayout, QDialog, QTextEdit, QMessageBox, QCheckBox, QComboBox
-from PyQt6.uic.Compiler.qtproxies import QtWidgets
-from flask import request
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
-from Crypto.Random import get_random_bytes
-import hashlib
+import json
 
-from Client.scripts.db_mgr.db_mgr import check_server
-
+users_by_pos = None
 auth_ss = """
             QComboBox {
                 background-color: #4CAF50;
@@ -120,27 +108,6 @@ class AddProjectBtn(QVBoxLayout):
     # TODO проверить сохраняемые данные.
 
 
-class PersonWorkingOnProject(QHBoxLayout):
-    def __init__(self):
-        super().__init__()
-        self.initialize()
-
-    def initialize(self):
-        self.name = QLineEdit()
-        self.name.setPlaceholderText("Инициалы рабочего")
-        self.job_title = QLineEdit()
-        self.job_title.setPlaceholderText("Должность рабочего")
-        self.NameAndTitle = QVBoxLayout()
-        self.NameAndTitle.setSpacing(1)
-        self.NameAndTitle.addWidget(self.name)
-        self.NameAndTitle.addWidget(self.job_title)
-        self.add_person_button = QPushButton()
-        self.add_person_button.setMaximumSize(20, 20)
-        self.add_person_button.setMinimumSize(15, 15)
-        self.add_person_button.setText("+")
-        self.addLayout(self.NameAndTitle)
-        self.addWidget(self.add_person_button)
-
 
 class AddProjectWidget(QDialog):
     def __init__(self, btn):
@@ -169,7 +136,6 @@ class AddProjectWidget(QDialog):
             text='*Добавьте людей, которые будут работать над проектом.(хотя бы одного) и назначьте им должность.')
         self.txt.setWordWrap(True)
         self.formlayout.addRow(self.txt, self.people_working_on_project)
-        self.add_people()
         self.save_btn.setText("Добавить проект")
         self.save_btn.clicked.connect(self.save)
         self.layout.addLayout(self.formlayout)
@@ -181,13 +147,10 @@ class AddProjectWidget(QDialog):
         self.project_desc = self.input_project_desc.toPlainText()
         print(self.project_desc, self.project_name, [text[0].text() for text in self.people_list])
         self.close()
-        # TODO сохранить проекты в бд.
 
-    def add_people(self):
-        self.person = PersonWorkingOnProject()
-        self.person.add_person_button.clicked.connect(self.add_people)
-        self.people_list.append(tuple([self.person.name, self.person.job_title]))
-        self.people_working_on_project.addLayout(self.person)
+    def AddPeople(self):
+        person = QComboBox()
+
 
 
 class MenuCentralWidget(QWidget):
@@ -277,7 +240,7 @@ class AuthWidget(QDialog):
         self.qbox.addItem("Менеджер")
         self.qbox.addItem("Рабочий")
         self.qbox.addItem("Посетитель")
-        self.setMinimumSize(350, 150)
+        self.setMinimumSize(350, 200)
         self.setMaximumSize(400, 300)
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.uname_input.setPlaceholderText("Логин")

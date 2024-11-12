@@ -1,5 +1,6 @@
 import asyncio
 import os
+import shutil
 import time
 import asyncbg
 import requests
@@ -15,6 +16,7 @@ from Client.scripts.ui.other_classes import MenuCentralWidget, NoServerFound, Au
 class LoadingUI(QWidget):
     def __init__(self):
         super().__init__()
+        self.login = None
         self.position = None
         self.port = None
         self.host = None
@@ -53,8 +55,7 @@ class LoadingUI(QWidget):
         self.label.setText(f"Выполняется задач перед запуском: {self.cnt}")
         self.bar.setValue(self.percent)
         if self.cnt == 0:
-            self.menu = MainMenu(self.host, self.port, self.position)
-            self.menu.show()
+            self.menu = MainMenu()
             self.close()
 
     @asyncSlot()
@@ -81,6 +82,7 @@ class LoadingUI(QWidget):
             return 403
         elif r.status_code == 200:
             self.position = r.text
+            self.login = login
             return 200
         else:
             return 404
@@ -126,7 +128,7 @@ class LoadingUI(QWidget):
                 t += 1
 
     def registration_denied(self):
-        os.remove("data")
+        shutil.rmtree("data")
         os.abort()
 
     @asyncSlot()
@@ -136,20 +138,13 @@ class LoadingUI(QWidget):
 
 
 class MainMenu(QMainWindow):
-    def __init__(self, host, port, position):
+    def __init__(self):
         super().__init__()
-        self.central_widget = MenuCentralWidget()
-        self.init_ui()
-        self.host = host
-        self.position = position
-        self.port = port
+        self.cw = MenuCentralWidget()
+        self.InitUI()
 
-    def closeEvent(self, a0):
-        requests.post(f"http://{self.host}:{self.port}/shutdown", data={"position": self.position})
-        a0.accept()
-
-    def init_ui(self):
+    def InitUI(self):
         self.setWindowTitle("Панель управления")
-        self.resize(QSize(1280, 720))
-        self.setCentralWidget(self.central_widget)
+        self.resize(1280, 720)
+        self.setCentralWidget(self.cw)
         self.show()

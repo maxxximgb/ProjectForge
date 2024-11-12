@@ -26,7 +26,7 @@ def remove_from_startup():
     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
                          winreg.KEY_SET_VALUE)
     try:
-        winreg.DeleteValue(key, "YourAppName")
+        winreg.DeleteValue(key, "ProjectManagerServer")
     except FileNotFoundError:
         pass
     winreg.CloseKey(key)
@@ -111,7 +111,6 @@ class Server(QMainWindow):
         self.configure_widget.finished.connect(self.force_restart_app)
 
     def force_restart_app(self):
-
         self.restart_messagebox = QMessageBox(text='Перезапустите приложение для применения изменений')
         self.restart_messagebox.setWindowTitle("Внимание!")
         self.restart_messagebox.show()
@@ -123,7 +122,8 @@ class Server(QMainWindow):
         self.setWindowTitle("Сервер")
         self.cw = CentralWidget()
         self.setCentralWidget(self.cw)
-        if bool(open('conf/app.conf', 'r').read()[1]):
+        print(open('conf/app.conf', 'r').read().split()[0].lower())
+        if open('conf/app.conf', 'r').read().split()[0].lower() == 'true':
             self.minimize_to_tray()
         else:
             self.show()
@@ -175,8 +175,8 @@ class ConfigureServer(QDialog):
     def apply_settings(self):
         with open("conf/app.conf", "r") as f:
             settings = f.read().split()
-            minimize_to_tray = settings[0] == 'True'
-            add_to_startup_b = settings[1] == 'True'
+            minimize_to_tray = settings[0].lower() == 'true'
+            add_to_startup_b = settings[1].lower() == 'true'
 
         if minimize_to_tray:
             sv.tray_icon.show()
