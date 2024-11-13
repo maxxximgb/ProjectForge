@@ -155,7 +155,7 @@ class ConfigureServer(QDialog):
                      [QLabel("Открывать программу при запуске компьютера?"), self.lines[1]]]
         if args:
             for i in range(2):
-                self.lines[i].setChecked(bool(args[i]))
+                self.lines[i].setChecked(args[i].lower() == 'true')
         for label, input_el in self.info:
             temp = QHBoxLayout()
             temp.addWidget(label)

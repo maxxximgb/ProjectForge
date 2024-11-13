@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -5,18 +6,26 @@ import socket
 import time
 import netifaces
 import requests
+from PyQt6.QtCore import QByteArray, QBuffer
 from flask import Flask, jsonify, request, Response
 from threading import Thread
 import sqlite3
 from flask import g
 
 app, port, connection, cursor, qapp = None, None, None, None, None
+all_users_updating = False
 pos2lvl = {"Директор": 4,
            "Менеджер": 3,
            "Рабочий": 2,
            "Посетитель": 1}
 database = "database/database.sqlite"
-users_by_pos = {
+online_users_by_pos = {
+    "Директор": [],
+    "Менеджер": [],
+    "Рабочий": [],
+    "Посетитель": []
+}
+all_users_by_pos = {
     "Директор": [],
     "Менеджер": [],
     "Рабочий": [],
@@ -43,7 +52,6 @@ def get_local_ip():
                         return ip
     except Exception as e:
         return str(e)
-
 
 
 def run_app(app, portik):
@@ -87,10 +95,11 @@ def ForceCreateProject(username, projectname, status):
         ''', (projectname, username, status))
         connection.commit()
 
+
 def get_waiting_directors():
     with app.app_context():
         conn = get_db()
-        cursor=conn.cursor()
+        cursor = conn.cursor()
         cursor.execute('''
             SELECT * FROM Users
             WHERE Position = 'Директор' AND Status = 'waiting'
@@ -114,21 +123,102 @@ def create_routes(app):
         if status == 'waiting':
             return status, 403
         elif status == 'approved':
-            global users_by_pos
+            global online_users_by_pos
             userdata = {"name": name, "ip": request.remote_addr, "status": status}
             logging.info(f"{position} {username} добавлен в список IP адресов")
-            users_by_pos[position].append(userdata)
+            online_users_by_pos[position].append(userdata)
+            fetch_all_users()
             return position, 200
         else:
             return 'Registration Denied', 404
 
+    @app.route("/getup", methods=["GET"])
+    def getup():
+        login = request.json.get("login")
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT 
+                Projects.ProjectID,
+                Projects.ProjectName,
+                Projects.ProjectDesc,
+                Projects.Status
+            FROM 
+                Projects
+            JOIN 
+                UserProjects ON Projects.ProjectID = UserProjects.ProjectID
+            JOIN 
+                Users ON UserProjects.UserID = Users.UserID
+            WHERE 
+                Users.SystemLogin = ?
+                AND Projects.Status = 'approved';
+        ''', (login,))
+        projects = cursor.fetchall()
+        if projects:
+            return jsonify(projects), 200
+        else:
+            return "No projects", 404
+
+    @app.route("/newproject", methods=["POST"])
+    def add_project():
+        data = request.json
+        login = data.get("login")
+        name = data.get("name")
+        desc = data.get("desc")
+        participants = data.get("participants")
+        image = base64.b64decode(data.get("image"))
+
+        with open(f"projects/{name}.png", "wb") as f:
+            f.write(image)
+
+        conn = get_db()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT UserID, Position FROM Users WHERE SystemLogin = ?
+        ''', (login,))
+        userid, position = cursor.fetchone()
+        if pos2lvl[position] > 2:
+            cursor.execute('''
+                INSERT INTO Projects (ProjectName, ProjectDesc, CreatorID, Status)
+                VALUES (?, ?, ?, ?)
+            ''', (name, desc, userid, 'approved'))
+        else:
+            cursor.execute('''
+                INSERT INTO Projects (ProjectName, ProjectDesc, CreatorID, Status)
+                VALUES (?, ?, ?, ?)
+            ''', (name, desc, userid, 'waiting'))
+        conn.commit()
+        cursor.execute('''SELECT ProjectID From Projects WHERE ProjectName = ?''', (name,))
+        project_id = cursor.fetchone()[0]
+        participants.append(userid)
+        for user_id in participants:
+            cursor.execute('''
+                INSERT INTO UserProjects (UserID, ProjectID)
+                VALUES (?, ?)
+            ''', (user_id, project_id))
+        conn.commit()
+        return "Created", 200
+
+    @app.route("/checkproject", methods=["GET"])
+    def checkProjectStatus():
+        conn = get_db()
+        cursor = conn.cursor()
+        projectid = request.json.get('id')
+        cursor.execute('''SELECT Status FROM Projects WHERE ProjectID = ?''', (projectid,))
+        status = cursor.fetchone()[0]
+        return status
+
     @app.route("/shutdown", methods=["POST"])
     def shutdown():
         ip = request.remote_addr
-        pos = request.json.get("position")
-        global user_ip_by_pos
-        user_ip_by_pos[pos].remove(ip)
-        logging.info(f"{pos} с IPv4 адресом {ip} был удален.")
+        global online_users_by_pos
+        for role, users in online_users_by_pos.items():
+            online_users_by_pos[role] = [user for user in users if user['ip'] != ip]
+            if any(user['ip'] == ip for user in users):
+                logging.info(f"{role} с IPv4 адресом {ip} был удален.")
+
+        return "OK", 200
 
     @app.route("/authuser", methods=["POST"])
     def auth_user():
@@ -150,7 +240,6 @@ def create_routes(app):
             return "Incorrect password", 403
         elif status == "waiting":
             return "You are not approved", 403
-
 
     @app.route("/newuser", methods=["POST"])
     def reg_user():
@@ -181,20 +270,49 @@ def create_routes(app):
             pass
         return "WaitForStatus", 200
 
+    @app.route("/allusers", methods=["GET"])
+    def all_users():
+        users = fetch_all_users()
+        return users
+
     @app.route("/ping", methods=["GET"])
     def ping():
         return "OK"
 
     @app.route("/user", methods=["GET"])
     def send_users():
-        global users_by_pos
-        return Response(json.dumps(users_by_pos, ensure_ascii=False), content_type='application/json; charset=utf-8')
+        global online_users_by_pos
+        return Response(json.dumps(online_users_by_pos, ensure_ascii=False),
+                        content_type='application/json; charset=utf-8')
 
     @app.teardown_appcontext
     def close_connection(exception):
         db = getattr(g, '_database', None)
         if db is not None:
             db.close()
+
+
+def fetch_all_users():
+    global all_users_by_pos
+    all_users_by_pos = {
+        "Директор": [],
+        "Менеджер": [],
+        "Рабочий": [],
+        "Посетитель": []
+    }
+    with app.app_context():
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT UserID, SystemLogin, Name, Position, Status FROM Users
+        ''')
+        users = cursor.fetchall()
+        global all_users_updating
+        all_users_updating = True
+        for user in users:
+            all_users_by_pos[user[3]].append([user[0], user[1], user[2]])
+        return all_users_by_pos
+
 
 def accept_director(login):
     global app
@@ -205,6 +323,7 @@ def accept_director(login):
             UPDATE Users SET Status = ? WHERE SystemLogin = ?
         ''', ('approved', login))
         conn.commit()
+
 
 def decline_director(login):
     global app
@@ -230,43 +349,47 @@ def decline_director(login):
 
         connection.commit()
 
+
 def create_app():
     global host, port, app, cursor, connection
     if not os.path.exists("database"):
         os.mkdir("database")
+    if not os.path.exists("projects"):
+        os.mkdir("projects")
     app = Flask("ServerListenner")
     with app.app_context():
         connection = get_db()
         cursor = connection.cursor()
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Users (
-            UserID       INTEGER PRIMARY KEY AUTOINCREMENT,
-            Name         TEXT    NOT NULL,
-            Password     TEXT    NOT NULL,
-            Status       TEXT    NOT NULL,
-            Position     TEXT    NOT NULL,
-            SystemLogin  TEXT    NOT NULL,
-            UserProjects         REFERENCES UserProjects (UserID) 
-        );
+            CREATE TABLE IF NOT EXISTS Users (
+                UserID       INTEGER PRIMARY KEY AUTOINCREMENT,
+                Name         TEXT    NOT NULL,
+                Password     TEXT    NOT NULL,
+                Status       TEXT    NOT NULL,
+                Position     TEXT    NOT NULL,
+                SystemLogin  TEXT    NOT NULL
+            );
         ''')
+
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Projects (
-            ProjectID INTEGER PRIMARY KEY AUTOINCREMENT,
-            ProjectName TEXT NOT NULL,
-            ProjectDesc TEXT NOT NULL,
-            CreatorID INTEGER NOT NULL,
-            Status TEXT NOT NULL,
-            FOREIGN KEY (CreatorID) REFERENCES Users(UserID)
-        );
+            CREATE TABLE IF NOT EXISTS Projects (
+                ProjectID INTEGER PRIMARY KEY AUTOINCREMENT,
+                ProjectName TEXT NOT NULL,
+                ProjectDesc TEXT,
+                CreatorID INTEGER NOT NULL,
+                Status TEXT NOT NULL,
+                FOREIGN KEY (CreatorID) REFERENCES Users(UserID)
+            );
         ''')
+
         cursor.execute('''
-        CREATE TABLE IF NOT EXISTS UserProjects (
-            UserID INTEGER,
-            ProjectID INTEGER,
-            PRIMARY KEY (UserID, ProjectID),
-            FOREIGN KEY (UserID) REFERENCES Users(UserID),
-            FOREIGN KEY (ProjectID) REFERENCES Projects(ProjectID)
-        )
+            CREATE TABLE IF NOT EXISTS UserProjects (
+                UserID INTEGER,
+                ProjectID INTEGER,
+                PRIMARY KEY (UserID, ProjectID),
+                FOREIGN KEY (UserID) REFERENCES Users(UserID),
+                FOREIGN KEY (ProjectID) REFERENCES Projects(ProjectID)
+            );
         ''')
         connection.commit()
 

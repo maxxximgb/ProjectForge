@@ -1,13 +1,15 @@
 import asyncio
+import base64
+import json
 import os.path
 import requests
-from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer
-from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent
+from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer, pyqtSignal, QByteArray, QBuffer, QIODevice
+from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent, QIcon, QPixmap, QImage
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QWidget, QLabel, QGridLayout, QSizePolicy, QSpacerItem, QLineEdit, \
-    QHBoxLayout, QFormLayout, QDialog, QTextEdit, QMessageBox, QCheckBox, QComboBox
-import json
+    QHBoxLayout, QFormLayout, QDialog, QTextEdit, QMessageBox, QCheckBox, QComboBox, QFileDialog
 
-users_by_pos = None
+online_users_by_pos = None
+all_users_by_pos = None
 auth_ss = """
             QComboBox {
                 background-color: #4CAF50;
@@ -76,7 +78,96 @@ auth_ss = """
                 color: #005a9e;
             }
         """
+cr_menu_ss = '''
+QDialog {
+    background-color: #2c2c2c;
+    font-family: Arial, sans-serif;
+    color: #ffffff;
+}
+
+QPushButton {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    border-radius: 5px;
+    transition: background-color 0.3s ease;
+}
+
+QPushButton:hover {
+    background-color: #2980b9;
+}
+
+QLineEdit {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #444444;
+    padding: 5px;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+QLineEdit:focus {
+    border: 1px solid #3498db;
+    outline: none;
+}
+
+QTextEdit {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #444444;
+    padding: 5px;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+QTextEdit:focus {
+    border: 1px solid #3498db;
+    outline: none;
+}
+
+QLabel {
+    color: #ffffff;
+    font-size: 14px;
+}
+
+
+
+QComboBox {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #444444;
+    padding: 5px;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+QComboBox:focus {
+    border: 1px solid #3498db;
+    outline: none;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #3c3c3c;
+    color: #ffffff;
+    border: 1px solid #444444;
+    selection-background-color: #3498db;
+}
+'''
 userpos = None
+pos2lvl = {"Директор": 4,
+           "Менеджер": 3,
+           "Рабочий": 2,
+           "Посетитель": 1}
+host = None
+port = None
+glogin = None
+
 
 class AddProjectBtn(QVBoxLayout):
     def __init__(self):
@@ -108,13 +199,33 @@ class AddProjectBtn(QVBoxLayout):
     # TODO проверить сохраняемые данные.
 
 
+class ClickableLabel(QLabel):
+    clicked = pyqtSignal()
+    pixmapChanged = pyqtSignal()
+
+    def __init__(self, *args):
+        super().__init__()
+        self.ispixmap = False
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def setPixmap(self, pixmap):
+        super().setPixmap(pixmap)
+        self.ispixmap = True
+        self.pixmapChanged.emit()
+
 
 class AddProjectWidget(QDialog):
     def __init__(self, btn):
         super().__init__()
+        self.removed_user_row = False
+        self.file_path = None
         self.hide()
         self.save_btn = QPushButton()
         self.txt = None
+        self.need_add = True
         self.project_name = ''
         self.project_desc = ''
         self.input_project_name = QLineEdit()
@@ -124,57 +235,265 @@ class AddProjectWidget(QDialog):
         self.layout = QVBoxLayout()
         self.formlayout = QFormLayout()
         self.setLayout(self.layout)
+        self.supported_formats = [
+            "*.bmp", "*.gif", "*.jpg", "*.jpeg", "*.png", "*.pbm", "*.pgm", "*.ppm", "*.xbm", "*.xpm"
+        ]
+        self.users = []
+        self.selected_users = set()  # Множество для отслеживания выбранных пользователей
 
     def initialize(self):
+        self.setStyleSheet(cr_menu_ss)
         self.setWindowTitle("Добавить проект")
         self.formlayout.setSpacing(20)
+        self.image = ClickableLabel()
+        self.image.setStyleSheet('''
+        ClickableLabel {
+            color: #3498db;
+            font-size: 14px;
+            border: 1px solid #444444;
+            padding: 5px;
+            border-radius: 3px;
+            background-color: #3c3c3c;
+            transition: background-color 0.3s ease;
+        }
+        ClickableLabel:hover {
+            background-color: #444444;
+            cursor: pointer;
+        }
+        ''')
+        self.image.setText("*Добавить картинку")
+        self.image.setMaximumSize(150, 200)
+        self.image.clicked.connect(self.addImage)
         self.input_project_desc.setMaximumHeight(60)
         self.input_project_name.setPlaceholderText("Название")
+        self.input_project_desc.setPlaceholderText("Описание")
+        self.formlayout.addRow(self.image)
         self.formlayout.addRow(QLabel(text='*Назовите проект.'), self.input_project_name)
         self.formlayout.addRow(QLabel(text='Опишите проект.'), self.input_project_desc)
-        self.txt = QLabel(
-            text='*Добавьте людей, которые будут работать над проектом.(хотя бы одного) и назначьте им должность.')
-        self.txt.setWordWrap(True)
-        self.formlayout.addRow(self.txt, self.people_working_on_project)
+
         self.save_btn.setText("Добавить проект")
         self.save_btn.clicked.connect(self.save)
         self.layout.addLayout(self.formlayout)
         self.layout.addWidget(self.save_btn)
+
+        # Добавляем текст и layout с combobox в formlayout
+        self.formlayout.addRow(QLabel("Добавьте пользователей"), self.people_working_on_project)
+
+        asyncio.create_task(self.empty_users_task())
         self.exec()
 
+    async def empty_users_task(self):
+        global all_users_by_pos, host, port, glogin
+        while self.isVisible():
+            r = requests.get(f"http://{host}:{port}/allusers")
+            all_users_by_pos = json.loads(r.text)
+            self.updateUsers()
+            await asyncio.sleep(9)
+
+    def updateUsers(self):
+        global all_users_by_pos, glogin
+
+        # Создаем множество всех пользователей, исключая себя
+        all_users = {user[0] for users in all_users_by_pos.values() for user in users if user[1] != glogin}
+        if not all_users:
+            if not self.removed_user_row:
+                # Удаляем строку с добавлением пользователей
+                self.formlayout.removeRow(self.people_working_on_project)
+                self.removed_user_row = True
+            return
+        else:
+            if self.removed_user_row:
+                self.people_working_on_project = QVBoxLayout()
+                self.formlayout.addRow(QLabel("Добавьте пользователей"), self.people_working_on_project)
+                self.removed_user_row = False
+
+        current_users = {combo_box.currentData() for combo_box in self.people_list if combo_box.currentIndex() >= 0}
+
+        new_users = all_users - current_users
+        removed_users = current_users - all_users
+
+        for i in reversed(range(self.people_working_on_project.count())):
+            item = self.people_working_on_project.itemAt(i)
+            hbox_layout = item.layout()
+            combo_box = hbox_layout.itemAt(0).widget()
+            if combo_box.currentIndex() >= 0:
+                user_id = combo_box.currentData()
+                if user_id in removed_users:
+                    self.people_working_on_project.removeItem(item)
+                    combo_box.deleteLater()
+                    hbox_layout.itemAt(1).widget().deleteLater()
+                    hbox_layout.deleteLater()
+                    self.people_list.remove(combo_box)
+
+        for combo_box in self.people_list:
+            for i in range(combo_box.count()):
+                if combo_box.itemData(i) in removed_users:
+                    combo_box.removeItem(i)
+
+        current_values = {combo_box: combo_box.currentData() for combo_box in self.people_list}
+
+        for combo_box in self.people_list:
+            combo_box.clear()
+            for position, users in all_users_by_pos.items():
+                if users:
+                    for user in users:
+                        if user[1] != glogin and user[0] not in self.selected_users:
+                            combo_box.addItem(f"{position} {user[2]}", user[0])
+
+        for combo_box, user_id in current_values.items():
+            index = combo_box.findData(user_id)
+            if index >= 0:
+                combo_box.setCurrentIndex(index)
+
+        if len(self.people_list) == 0:
+            self.addNewComboBox()
+        self.updateAddButton()
+
+    def updateAddButton(self):
+        global all_users_by_pos, glogin
+        last_combo_box = self.people_list[-1]
+        if last_combo_box.currentIndex() >= 0:
+            total_users = sum(len(users) for users in all_users_by_pos.values()) - 1
+            if len(self.people_list) < total_users:
+                last_hbox_layout = self.people_working_on_project.itemAt(
+                    self.people_working_on_project.count() - 1).layout()
+                last_add_button = last_hbox_layout.itemAt(1).widget()
+                last_add_button.setVisible(True)
+            else:
+                for i in range(self.people_working_on_project.count()):
+                    hbox_layout = self.people_working_on_project.itemAt(i).layout()
+                    add_button = hbox_layout.itemAt(1).widget()
+                    add_button.setVisible(False)
+        else:
+            for i in range(self.people_working_on_project.count()):
+                hbox_layout = self.people_working_on_project.itemAt(i).layout()
+                add_button = hbox_layout.itemAt(1).widget()
+                add_button.setVisible(False)
+
+    def addNewComboBox(self):
+        global all_users_by_pos, glogin
+        new_combo_box = QComboBox()
+        new_combo_box.setPlaceholderText("Выберите участников")
+        for position, users in all_users_by_pos.items():
+            if users:
+                for user in users:
+                    if user[1] != glogin and user[0] not in self.selected_users:
+                        new_combo_box.addItem(f"{position} {user[2]}", user[0])
+        new_combo_box.currentIndexChanged.connect(self.updateAddButton)
+        self.people_list.append(new_combo_box)
+        hbox_layout = QHBoxLayout()
+        hbox_layout.addWidget(new_combo_box)
+        add_button = QPushButton("+")
+        add_button.clicked.connect(self.addNewComboBox)
+        add_button.setVisible(False)
+        hbox_layout.addWidget(add_button)
+        self.people_working_on_project.addLayout(hbox_layout)
+        self.updateAddButton()
+
     def save(self):
+        global host, port
+        r = False
+        if not self.image.ispixmap:
+            self.image.setStyleSheet("border: 2px solid red;")
+            self.image.pixmapChanged.connect(lambda: self.image.setStyleSheet(""))
+            r = True
+        if not self.input_project_name.text():
+            self.input_project_name.setStyleSheet("border: 2px solid red;")
+            self.input_project_name.textChanged.connect(lambda: self.input_project_name.setStyleSheet(""))
+            r = True
+        if r: return
+        global glogin
         self.project_name = self.input_project_name.text()
         self.project_desc = self.input_project_desc.toPlainText()
-        print(self.project_desc, self.project_name, [text[0].text() for text in self.people_list])
+        data = {
+            "login": glogin,
+            "name": self.project_name,
+            "desc": self.project_desc,
+            "image": None
+        }
+        image = self.image.pixmap().toImage()
+        byte_array = QByteArray()
+        buffer = QBuffer(byte_array)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        image_base64 = base64.b64encode(byte_array).decode('utf-8')
+        data["image"] = image_base64
+        participants = []
+        for combo_box in self.people_list:
+            if combo_box.currentIndex() >= 0:
+                user_id = combo_box.currentData()
+                participants.append(user_id)
+                self.selected_users.add(user_id)
+        data["participants"] = participants
+        r = requests.post(f"http://{host}:{port}/newproject", json=data)
+        if r.status_code == 200:
+            mbox = QMessageBox()
+            mbox.setText("Проект успешно создан в системе и ждет подтверждения.")
+            mbox.setIcon(QMessageBox.Icon.Information)
+            mbox.setWindowTitle("Проект успешно создан.")
+            mbox.exec()
+            mbox.finished.connect(self.close)
         self.close()
 
-    def AddPeople(self):
-        person = QComboBox()
-
+    def addImage(self):
+        filter_string = "Картинки (" + " ".join(self.supported_formats) + ")"
+        self.file_path, _ = QFileDialog.getOpenFileName(None, "Выберите картинку проекта", "", filter_string)
+        if not self.file_path: return
+        image = QImage(self.file_path)
+        pixmap = QPixmap.fromImage(image)
+        scaled_pixmap = pixmap.scaled(QSize(100, 150), Qt.AspectRatioMode.KeepAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation)
+        self.image.setPixmap(scaled_pixmap)
+        self.image.setStyleSheet("")
 
 
 class MenuCentralWidget(QWidget):
-    def __init__(self):
+    def __init__(self, server, pos):
         super().__init__()
+        global userpos
+        userpos = pos
+        self.server = server
         self.no_projects = None
         self.no_project_widget = None
         self.cur_project_widget = None
         self.layout = QGridLayout()
+        self.pending_users = None
+        self.pending_label = None
+        self.projects = []
         self.cur_col = 0
         self.cur_row = 0
         self.setLayout(self.layout)
-        self.no_project_exsist()
+        self.InitUI()
 
-    def add_project(self, project):
-        self.cur_project_widget = QWidget()
-        self.cur_project_widget.setLayout(project)
-        self.cur_project_widget.setFixedSize(QSize(200, 200))
-        self.layout.addWidget(self.cur_project_widget, self.cur_row, self.cur_col)
-        if self.cur_col == 5:
-            self.cur_col = 0
-            self.cur_row += 1
+    async def updateProjects(self):
+        global host, port, glogin
+        while True:
+            r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
+            await asyncio.sleep(5)
+
+    def InitUI(self):
+        global userpos, pos2lvl
+        r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
+        if r.status_code != 404:
+            l = json.loads(r.text)
         else:
-            self.cur_col += 1
+            self.no_project_exsist()
+
+        asyncio.create_task(self.updateProjects())
+        asyncio.create_task(self.UserPingTask())
+
+    def insertProject(self, project):
+        if project not in self.projects:
+            self.projects.append(project)
+            self.layout.addWidget()
+
+    async def UserPingTask(self):
+        global host, port, online_users_by_pos
+        while True:
+            r = requests.get(f"http://{host}:{port}/user")
+            if r.status_code == 200:
+                online_users_by_pos = json.loads(r.text)
+            await asyncio.sleep(5)
 
     def no_project_exsist(self):
         self.no_project_widget = QWidget()
@@ -207,14 +526,14 @@ class NoServerFound(QDialog):
 
 
 class AuthWidget(QDialog):
-    def __init__(self, host, port, loading_ui):
+    def __init__(self, hosts, ports, loading_ui):
+        global host, port
         super().__init__()
+        host, port = hosts, ports
         self.ui = loading_ui
         self.mbox = None
         self.qbox = QComboBox()
         self.fio = QLineEdit()
-        self.shost = host
-        self.sport = port
         self.uname_input = QLineEdit()
         self.password_input = QLineEdit()
         self.register_btn = QPushButton()
@@ -251,12 +570,13 @@ class AuthWidget(QDialog):
             self.show_reg_mbox()
         else:
             try:
+                global host, port
                 with open('data/user.dat', 'r') as f:
                     d = f.read()
                     if d:
                         auth = self.check_auth(d.split())
                         if auth == 0:
-                            asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, d.split()[1]))
+                            asyncio.ensure_future(self.ui.wait_for_server(host, port, d.split()[1]))
                             self.close()
                             f.close()
                             return 0
@@ -269,10 +589,12 @@ class AuthWidget(QDialog):
                 os.abort()
 
     def check_auth(self, d):
+        global host, port, glogin
         password, login = d
+        glogin = login
         data = {"password": password,
                 "login": login}
-        r = requests.post(f"http://{self.shost}:{self.sport}/authuser", json=data)
+        r = requests.post(f"http://{host}:{port}/authuser", json=data)
         if r.status_code == 403 or r.status_code == 404:
             mbox = QMessageBox()
             mbox.setIcon(QMessageBox.Icon.Critical)
@@ -295,11 +617,14 @@ class AuthWidget(QDialog):
                 ans = mbox.exec()
                 if ans == QMessageBox.StandardButton.Yes:
                     self.close()
-                    asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, login))
+                    asyncio.ensure_future(self.ui.wait_for_server(host, port, login))
                     return 0
                 else:
                     os.abort()
         else:
+            global userpos
+            userpos = r.text
+
             return 0
 
     def show_reg_mbox(self):
@@ -363,6 +688,8 @@ class AuthWidget(QDialog):
         self.send_data(datatype, login, password, name, position)
 
     def send_data(self, datatype, login, password, name='', position=''):
+        global host, port, glogin
+        glogin = login
         if datatype == "register":
             data = {
                 "password": password,
@@ -370,8 +697,7 @@ class AuthWidget(QDialog):
                 "pos": position,
                 "name": name
             }
-            r = requests.post(f"http://{self.shost}:{self.sport}/newuser", json=data)
-            print(r.text)
+            r = requests.post(f"http://{host}:{port}/newuser", json=data)
             if r.status_code == 403:
                 already_registered = QMessageBox()
                 already_registered.setText(
@@ -388,7 +714,7 @@ class AuthWidget(QDialog):
                 self.save_data(password, login)
                 if ans == QMessageBox.StandardButton.Yes:
                     self.close()
-                    asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, login))
+                    asyncio.ensure_future(self.ui.wait_for_server(host, port, login))
                     return 0
                 else:
                     os.abort()
@@ -397,7 +723,7 @@ class AuthWidget(QDialog):
             if auth == 0:
                 self.save_data(password, login)
                 self.close()
-                asyncio.ensure_future(self.ui.wait_for_server(self.shost, self.sport, login))
+                asyncio.ensure_future(self.ui.wait_for_server(host, port, login))
                 return 0
 
     def save_data(self, password, login):
@@ -429,6 +755,5 @@ class AuthWidget(QDialog):
             valid = False
         else:
             self.password_input.setStyleSheet("")
-
 
         return valid

@@ -1,16 +1,18 @@
 import asyncio
 import os
 import shutil
-import time
+
 import asyncbg
 import requests
-from flask import request
-from qasync import asyncSlot, QEventLoop
-from Client.scripts.db_mgr.db_mgr import find_active_servers
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QLabel, QHBoxLayout, QMainWindow, \
     QMessageBox
+from qasync import asyncSlot
+
+from Client.scripts.db_mgr.db_mgr import find_active_servers
 from Client.scripts.ui.other_classes import MenuCentralWidget, NoServerFound, AuthWidget
+
+hostik, portik = None, None
 
 
 class LoadingUI(QWidget):
@@ -55,7 +57,7 @@ class LoadingUI(QWidget):
         self.label.setText(f"Выполняется задач перед запуском: {self.cnt}")
         self.bar.setValue(self.percent)
         if self.cnt == 0:
-            self.menu = MainMenu()
+            self.menu = MainMenu(self.position)
             self.close()
 
     @asyncSlot()
@@ -72,6 +74,9 @@ class LoadingUI(QWidget):
                 await self.unable_to_find_server()
         self.change_tasks_count()
         self.host, self.port = host, port
+        global hostik, portik
+        hostik = host
+        portik = port
         self.authorize_user(host, port)
         return 0
 
@@ -95,7 +100,8 @@ class LoadingUI(QWidget):
                 s = await self.checkStatus(login, host, port)
             except:
                 mbox = QMessageBox()
-                mbox.setText("Сервер не отвечает на запросы клиента. Обратитесь к системному администратору с просьбой перезапустить его.")
+                mbox.setText(
+                    "Сервер не отвечает на запросы клиента. Обратитесь к системному администратору с просьбой перезапустить его.")
                 mbox.setIcon(QMessageBox.Icon.Critical)
                 mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
                 mbox.setWindowTitle("Сервер не отвечвает")
@@ -104,7 +110,8 @@ class LoadingUI(QWidget):
             self.label.setText(f"Ожидание ответа от сервера. Запросов выполнено: {t}")
             if s == 500:
                 mbox = QMessageBox()
-                mbox.setText("На сервере произошла ошибка, пожалуйста, обратитесь к системному администратору за помощью.")
+                mbox.setText(
+                    "На сервере произошла ошибка, пожалуйста, обратитесь к системному администратору за помощью.")
                 mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
                 mbox.setIcon(QMessageBox.Icon.Critical)
                 mbox.setWindowTitle("Ошибка сервера")
@@ -138,13 +145,18 @@ class LoadingUI(QWidget):
 
 
 class MainMenu(QMainWindow):
-    def __init__(self):
+    def __init__(self, pos):
         super().__init__()
-        self.cw = MenuCentralWidget()
+        self.cw = MenuCentralWidget(self, pos)
         self.InitUI()
+
+    def closeEvent(self, a0):
+        global hostik, portik
+        r = requests.post(f"http://{hostik}:{portik}/shutdown")
+        os.abort()
 
     def InitUI(self):
         self.setWindowTitle("Панель управления")
-        self.resize(1280, 720)
+        self.resize(900, 600)
         self.setCentralWidget(self.cw)
         self.show()
