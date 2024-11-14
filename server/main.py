@@ -5,10 +5,12 @@ from ui.ui import Server
 from PyQt6.QtWidgets import QApplication
 import sys
 
+
 def run():
     app = QApplication([])
     server = Server()
     sys.exit(app.exec())
+
 
 if not os.path.exists('logs'): os.mkdir('logs')
 
@@ -32,4 +34,3 @@ try:
 except Exception as e:
     logging.error(e)
     os.abort()
-

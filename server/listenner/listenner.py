@@ -132,6 +132,16 @@ def create_routes(app):
         else:
             return 'Registration Denied', 404
 
+    @app.route("/pendingProjects", methods=["GET"])
+    def pendingProjects():
+        cursor = get_db().cursor()
+        cursor.execute('''SELECT * FROM Projects WHERE Status = ?''', ('waiting',))
+        pr = cursor.fetchall()
+        if not pr:
+            return 404
+
+        return jsonify(pr)
+
     @app.route("/getup", methods=["GET"])
     def getup():
         login = request.json.get("login")
@@ -177,7 +187,8 @@ def create_routes(app):
     @app.route("/userid", methods=["GET"])
     def userid():
         cursor = get_db().cursor()
-        cursor.execute("SELECT * FROM Users WHERE UserID = ?;", (request.json.get("id"),))
+        cursor.execute("SELECT Name, Status, Position, SystemLogin FROM Users WHERE UserID = ?;",
+                       (request.json.get("id"),))
         data = cursor.fetchone()
         return jsonify(data)
 
@@ -189,7 +200,6 @@ def create_routes(app):
         desc = data.get("desc")
         participants = data.get("participants")
         image = base64.b64decode(data.get("image"))
-
 
         conn = get_db()
         cursor = conn.cursor()
@@ -314,6 +324,20 @@ def create_routes(app):
         return Response(json.dumps(online_users_by_pos, ensure_ascii=False),
                         content_type='application/json; charset=utf-8')
 
+    @app.route("/pendingusers")
+    def pending_users():
+        cursor = get_db().cursor()
+        cursor.execute('''
+            SELECT UserID, Name, Status, Position, SystemLogin FROM Users 
+            WHERE Status = ? 
+            AND Position IN (?, ?, ?)
+        ''', ('waiting', 'Менеджер', 'Рабочий', 'Посетитель'))
+
+        us = cursor.fetchall()
+        if not us:
+            return 404
+        return us
+
     @app.teardown_appcontext
     def close_connection(exception):
         db = getattr(g, '_database', None)
@@ -336,8 +360,6 @@ def fetch_all_users():
         SELECT UserID, SystemLogin, Name, Position, Status FROM Users
         ''')
         users = cursor.fetchall()
-        global all_users_updating
-        all_users_updating = True
         for user in users:
             all_users_by_pos[user[3]].append([user[0], user[1], user[2]])
         return all_users_by_pos

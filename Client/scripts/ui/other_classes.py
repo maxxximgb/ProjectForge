@@ -203,7 +203,8 @@ QPushButton:pressed {
     background-color: #D84315;
 }
 """
-
+pending_users = []
+pending_projects = []
 userpos = None
 pos2lvl = {"Директор": 4,
            "Менеджер": 3,
@@ -349,7 +350,6 @@ class AddProjectWidget(QDialog):
         self.layout.addLayout(self.formlayout)
         self.layout.addWidget(self.save_btn)
 
-        # Добавляем текст и layout с combobox в formlayout
         self.formlayout.addRow(QLabel("Добавьте пользователей"), self.people_working_on_project)
 
         asyncio.create_task(self.empty_users_task())
@@ -366,11 +366,9 @@ class AddProjectWidget(QDialog):
     def updateUsers(self):
         global all_users_by_pos, glogin
 
-        # Создаем множество всех пользователей, исключая себя
         all_users = {user[0] for users in all_users_by_pos.values() for user in users if user[1] != glogin}
         if not all_users:
             if not self.removed_user_row:
-                # Удаляем строку с добавлением пользователей
                 self.formlayout.removeRow(self.people_working_on_project)
                 self.removed_user_row = True
             return
@@ -531,6 +529,10 @@ class AddProjectWidget(QDialog):
 class MenuCentralWidget(QWidget):
     def __init__(self, server, pos):
         super().__init__()
+        self.pending_projects_label = None
+        self.pendings = None
+        self.showPending = None
+        self.pending_users_label = None
         self.current_row_width = 0
         self.rows = []
         global userpos
@@ -539,16 +541,17 @@ class MenuCentralWidget(QWidget):
         self.no_projects = None
         self.no_project_widget = None
         self.cur_project_widget = None
-        self.layout = QVBoxLayout()  # Используем QVBoxLayout вместо QGridLayout
+        self.gl = QGridLayout()
+        self.layout = QVBoxLayout()
         self.pending_users = None
-        self.pending_label = None
+        self.pending_layout = None
         self.pr_layouts = []
         self.projects = []
         self.cur_col = 0
         self.cur_row = 0
         self.add_project_btn = None
         self.empty_widgets = []
-        self.setLayout(self.layout)
+        self.setLayout(self.gl)
         self.InitUI()
 
     async def updateProjects(self):
@@ -566,6 +569,7 @@ class MenuCentralWidget(QWidget):
 
     def InitUI(self):
         global userpos, pos2lvl, glogin
+
         r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
         if r.status_code == 404 and pos2lvl[userpos] == 1:
             mbox = QMessageBox()
@@ -577,12 +581,31 @@ class MenuCentralWidget(QWidget):
             os.abort()
         asyncio.create_task(self.updateProjects())
         if pos2lvl[userpos] > 2:
+            self.pending_layout = QHBoxLayout()
+            self.pending_users_label = QLabel()
+            self.pending_projects_label = QLabel()
+            self.pendings = QVBoxLayout()
+            self.pendings.addWidget(self.pending_users_label)
+            self.pendings.addWidget(self.pending_projects_label)
+            self.pending_layout.addLayout(self.pendings)
+            self.showPending = QPushButton()
+            self.showPending.setText("Проверить")
+            self.showPending.clicked.connect(self.showpending)
+            self.pending_layout.addWidget(self.showPending)
+            self.showPending.setVisible(False)
+            self.gl.addLayout(self.pending_layout, 0, 0,
+                              alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
             asyncio.create_task(self.UserPingTask())
         if pos2lvl[userpos] > 1:
             self.add_project_btn = QWidget()
             self.add_project_btn.setLayout(AddProjectBtn())
             self.add_project_btn.setMaximumSize(300, 310)
-            self.layout.addWidget(self.add_project_btn, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.layout.addWidget(self.add_project_btn,
+                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.gl.addLayout(self.layout, 0, 0)
+
+    def showpending(self):
+        pass
 
     def insertProject(self, project):
         if project[0] not in self.projects:
@@ -620,12 +643,48 @@ class MenuCentralWidget(QWidget):
                                         alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
     async def UserPingTask(self):
-        global host, port, online_users_by_pos
-        while True:
-            r = requests.get(f"http://{host}:{port}/user")
-            if r.status_code == 200:
-                online_users_by_pos = json.loads(r.text)
-            await asyncio.sleep(5)
+        global host, port, pending_users, pending_projects
+        while self.isVisible():
+            a = False
+            pu = requests.get(f"http://{host}:{port}/pendingusers")
+            pp = requests.get(f"http://{host}:{port}/pendingProjects")
+            if pu.status_code == 200:
+                users = json.loads(pu.text)
+                for el in users:
+                    if el not in pending_users:
+                        pending_users.append(el)
+                if len(pending_users) > 0:
+                    a = True
+                    self.pending_users_label.setText(f"Пользователей, ожидающих регистрации: {len(pending_users)}")
+            else:
+                self.pending_users_label.setText(f"Никто не ожидает регистрации")
+            if pp.status_code == 200:
+                a = True
+                projects = json.loads(pp.text)
+                self.pending_projects_label.setText(f"Проектов, ожидающих регистрации: {len(projects)}")
+                print(projects)
+            else:
+                self.pending_projects_label.setText("Нет ожидающих подтверждения проектов")
+            self.showPending.setVisible(a)
+            await asyncio.sleep(9)
+
+
+class PendingUP(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.headers = [QLabel("Проекты"), QLabel("Пользователи")]
+        self.lout = QVBoxLayout()
+        self.hlout = QHBoxLayout()
+        self.ulout = QHBoxLayout()
+        self.initUI()
+
+    def initUI(self):
+        global pending_projects, pending_users
+        self.lout.addLayout(self.hlout)
+        if pending_projects:
+            self.hlout.addWidget(self.headers[0])
+        if pending_users:
+            self.hlout.addWidget(self.headers[1])
 
 
 class Project(QVBoxLayout):
@@ -738,7 +797,7 @@ class ProjectInfo(QDialog):
         r = requests.get(f"http://{host}:{port}/userid", json={"id": self.project[3]})
         l = json.loads(r.text)
         self.creator.setWordWrap(True)
-        self.creator.setText(f"Создатель: {l[4]} {l[1]}, {l[5]}")
+        self.creator.setText(f"Создатель: {l[2]} {l[0]}, {l[3]}")
         self.lout.addWidget(self.status)
         self.lout.addWidget(self.name)
         self.lout.addWidget(self.desc)
