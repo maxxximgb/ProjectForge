@@ -6,7 +6,7 @@ import sys
 import socket
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QAction
-from server.listenner.listenner import run_app, create_app, share, ForceCreateProject, get_waiting_directors, \
+from listenner.listenner import run_app, create_app, share, ForceCreateProject, get_waiting_directors, \
     accept_director, decline_director
 from PyQt6.QtWidgets import QWidget, QApplication, QLabel, QMessageBox, QMainWindow, QMenu, QFormLayout, QLineEdit, \
     QCheckBox, QHBoxLayout, QSizePolicy, QVBoxLayout, QDialog, QPushButton, QSystemTrayIcon, QScrollArea

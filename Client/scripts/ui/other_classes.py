@@ -3,8 +3,6 @@ import base64
 import json
 import os.path
 import sys
-from operator import imatmul
-
 import requests
 from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer, pyqtSignal, QByteArray, QBuffer, QIODevice, QRectF
 from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent, QIcon, QPixmap, QImage, QPainter, QBrush, QPainterPath

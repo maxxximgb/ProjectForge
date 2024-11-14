@@ -5,8 +5,6 @@ import os
 import socket
 import time
 import netifaces
-import requests
-from PyQt6.QtCore import QByteArray, QBuffer
 from flask import Flask, jsonify, request, Response, send_file
 from threading import Thread
 import sqlite3

@@ -1,5 +1,5 @@
 import asyncio
-from Client.scripts.ui.Windows import LoadingUI
+from scripts.ui.Windows import LoadingUI
 import sys
 from PyQt6.QtWidgets import QApplication
 from qasync import QEventLoop

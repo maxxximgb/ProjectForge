@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QL
     QMessageBox, QScrollArea
 from qasync import asyncSlot
 
-from Client.scripts.db_mgr.db_mgr import find_active_servers
-from Client.scripts.ui.other_classes import MenuCentralWidget, NoServerFound, AuthWidget
+from scripts.db_mgr.db_mgr import find_active_servers
+from scripts.ui.other_classes import MenuCentralWidget, NoServerFound, AuthWidget
 
 hostik, portik = None, None
 
