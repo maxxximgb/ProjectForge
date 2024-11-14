@@ -169,7 +169,7 @@ QVBoxLayout {
 
 QLabel {
     font-family: Arial, sans-serif;
-    font-size: 16px; /* Увеличенный размер шрифта */
+    font-size: 16px;
 }
 
 QLabel#imagelabel {
@@ -190,7 +190,6 @@ QPushButton {
     text-align: center;
     text-decoration: none;
     display: inline-block;
-    font-size: 14px;
     margin: 4px 2px;
     cursor: pointer;
     border-radius: 5px;
@@ -260,8 +259,8 @@ class AddProjectBtn(QVBoxLayout):
         self.textlabel.setFont(self.font)
         self.textlabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.textlabel.setFont(QFont())
-        self.add_btn.setMinimumSize(135, 135)
-        self.add_btn.setMaximumSize(150, 150)
+        self.add_btn.setMinimumSize(200, 200)
+        self.add_btn.setMaximumSize(300, 300)
         self.add_btn.setText('+')
         self.setSpacing(0)
         self.add_btn.clicked.connect(self.add_project)
@@ -532,13 +531,15 @@ class AddProjectWidget(QDialog):
 class MenuCentralWidget(QWidget):
     def __init__(self, server, pos):
         super().__init__()
+        self.current_row_width = 0
+        self.rows = []
         global userpos
         userpos = pos
         self.server = server
         self.no_projects = None
         self.no_project_widget = None
         self.cur_project_widget = None
-        self.layout = QGridLayout()
+        self.layout = QVBoxLayout()  # Используем QVBoxLayout вместо QGridLayout
         self.pending_users = None
         self.pending_label = None
         self.pr_layouts = []
@@ -566,7 +567,6 @@ class MenuCentralWidget(QWidget):
     def InitUI(self):
         global userpos, pos2lvl, glogin
         r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
-
         if r.status_code == 404 and pos2lvl[userpos] == 1:
             mbox = QMessageBox()
             mbox.setText("У вас нет доступа к проектам пользователей.")
@@ -578,15 +578,11 @@ class MenuCentralWidget(QWidget):
         asyncio.create_task(self.updateProjects())
         if pos2lvl[userpos] > 2:
             asyncio.create_task(self.UserPingTask())
-
         if pos2lvl[userpos] > 1:
             self.add_project_btn = QWidget()
             self.add_project_btn.setLayout(AddProjectBtn())
-            self.add_project_btn.setMaximumSize(200, 300)
-            self.layout.addWidget(self.add_project_btn, self.cur_row, self.cur_col,
-                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-        self.addEmptyWidgets()
+            self.add_project_btn.setMaximumSize(300, 310)
+            self.layout.addWidget(self.add_project_btn, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
     def insertProject(self, project):
         if project[0] not in self.projects:
@@ -597,37 +593,31 @@ class MenuCentralWidget(QWidget):
             pwidget.setLayout(pr)
             pwidget.setMaximumSize(200, 300)
             pwidget.setStyleSheet(proj_ss)
-            self.pr_layouts.append([pr.project])
+            pr.initUI()
+            self.pr_layouts.append([pr, project])
+            if self.cur_col == 0:
+                self.cur_row += 1
+                hbox = QHBoxLayout()
+                self.layout.addLayout(hbox)
+                self.current_row_width = 0
+                self.rows.append(hbox)
 
-            if self.empty_widgets:
-                empty_widget = self.empty_widgets.pop(0)
-                self.layout.removeWidget(empty_widget)
-                empty_widget.deleteLater()
+            self.rows[-1].addWidget(pwidget, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.current_row_width += pr.sizeHint().width()
 
-            self.layout.addWidget(pwidget, self.cur_row, self.cur_col,
-                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            self.cur_col += 1
-            if self.cur_col >= 5:
+            if self.current_row_width >= 700:
                 self.cur_col = 0
                 self.cur_row += 1
-                self.addEmptyWidgets()
-
-            if self.add_project_btn:
-                self.layout.removeWidget(self.add_project_btn)
-                self.layout.addWidget(self.add_project_btn, self.cur_row, self.cur_col,
-                                      alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-    def addEmptyWidgets(self):
-        for _ in range(5):
-            empty_widget = QWidget()
-            empty_widget.setMaximumSize(200, 300)
-            empty_widget.setVisible(False)
-            self.layout.addWidget(empty_widget, self.cur_row, self.cur_col,
-                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            self.empty_widgets.append(empty_widget)
-            self.cur_col += 1
-        self.cur_col = 0
-        self.cur_row += 1
+                hbox = QHBoxLayout()
+                self.layout.addLayout(hbox)
+                self.current_row_width = 0
+                self.rows.append(hbox)
+                self.rows[-1].addWidget(self.add_project_btn,
+                                        alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            else:
+                self.cur_col += 1
+                self.rows[-1].addWidget(self.add_project_btn,
+                                        alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
     async def UserPingTask(self):
         global host, port, online_users_by_pos
@@ -643,6 +633,7 @@ class Project(QVBoxLayout):
         super().__init__()
         self.project = project
         self.more_btn = QPushButton("О проекте")
+        self.planning_btn = QPushButton("Планирование проекта")
         self.pixmap = None
         self.qimage = QImage()
         self.image = project[-1]
@@ -651,7 +642,6 @@ class Project(QVBoxLayout):
         self.name = QLabel(project[1])
         self.desc = QLabel(project[2])
         self.status = project[4]
-        self.initUI()
 
     def initUI(self):
         asyncio.create_task(self.selfPingTask())
@@ -659,9 +649,12 @@ class Project(QVBoxLayout):
         self.pixmap = QPixmap.fromImage(self.qimage)
         self.updateImage()
         self.more_btn.clicked.connect(self.showMore)
+        self.planning_btn.clicked.connect(self.showplan)
+        self.name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.addWidget(self.imagelabel)
         self.addWidget(self.name)
         self.addWidget(self.more_btn)
+        self.addWidget(self.planning_btn)
         self.setSpacing(5)
 
     def updateImage(self):
@@ -670,15 +663,20 @@ class Project(QVBoxLayout):
             self.pixmap = QPixmap.fromImage(grayscale_image)
         elif self.status == "approved":
             self.pixmap = QPixmap.fromImage(self.qimage)
-        target_width = 200
-        target_height = 100
-        if self.pixmap.width() < target_width or self.pixmap.height() < target_height:
-            scaled_pixmap = self.pixmap.scaled(target_width, target_height, Qt.AspectRatioMode.KeepAspectRatio,
-                                               Qt.TransformationMode.SmoothTransformation)
+
+        if self.pixmap.width() > self.pixmap.height():
+            target_height = 165
+            aspect_ratio = self.pixmap.width() / self.pixmap.height()
+            target_width = int(target_height * aspect_ratio)
+            self.parentWidget().setMaximumWidth(target_width + 20)
         else:
-            scaled_pixmap = self.pixmap.scaled(self.imagelabel.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                               Qt.TransformationMode.SmoothTransformation)
-        self.imagelabel.resize(target_width, target_height)
+            target_width = 165
+            target_height = 165
+
+        scaled_pixmap = self.pixmap.scaled(target_width, target_height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                           Qt.TransformationMode.SmoothTransformation)
+
+        self.imagelabel.resize(scaled_pixmap.size())
         self.imagelabel.setPixmap(roundCorners(scaled_pixmap, 10))
 
     async def selfPingTask(self):
@@ -696,14 +694,25 @@ class Project(QVBoxLayout):
                 self.updateImage()
             await asyncio.sleep(9)
 
+    def showplan(self):
+        board = KanbanBoard()
+        board.show()
+
     def showMore(self):
         info = ProjectInfo(self.project)
         info.exec()
 
-class Kanban(QWidget):
+
+class KanbanBoard(QWidget):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("Канбан Доска BETA")
+        self.headers = ["Не назначено", "Выполняется", "Выполнено"]
+        self.header = QHBoxLayout()
+        self.initUI()
 
+    def initUI(self):
+        [self.header.addWidget(QLabel(el)) for el in self.headers]
 
 
 class ProjectInfo(QDialog):
