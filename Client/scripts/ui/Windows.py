@@ -6,7 +6,7 @@ import asyncbg
 import requests
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import QWidget, QProgressBar, QApplication, QVBoxLayout, QLabel, QHBoxLayout, QMainWindow, \
-    QMessageBox
+    QMessageBox, QScrollArea
 from qasync import asyncSlot
 
 from Client.scripts.db_mgr.db_mgr import find_active_servers
@@ -147,7 +147,10 @@ class LoadingUI(QWidget):
 class MainMenu(QMainWindow):
     def __init__(self, pos):
         super().__init__()
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
         self.cw = MenuCentralWidget(self, pos)
+        self.scroll_area.setWidget(self.cw)
         self.InitUI()
 
     def closeEvent(self, a0):
@@ -158,5 +161,5 @@ class MainMenu(QMainWindow):
     def InitUI(self):
         self.setWindowTitle("Панель управления")
         self.resize(900, 600)
-        self.setCentralWidget(self.cw)
+        self.setCentralWidget(self.scroll_area)
         self.show()

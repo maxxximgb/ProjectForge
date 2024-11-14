@@ -2,9 +2,12 @@ import asyncio
 import base64
 import json
 import os.path
+import sys
+from operator import imatmul
+
 import requests
-from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer, pyqtSignal, QByteArray, QBuffer, QIODevice
-from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent, QIcon, QPixmap, QImage
+from PyQt6.QtCore import QSize, QRect, Qt, QLine, QTimer, pyqtSignal, QByteArray, QBuffer, QIODevice, QRectF
+from PyQt6.QtGui import QFont, QTextFrame, QCloseEvent, QIcon, QPixmap, QImage, QPainter, QBrush, QPainterPath
 from PyQt6.QtWidgets import QVBoxLayout, QPushButton, QWidget, QLabel, QGridLayout, QSizePolicy, QSpacerItem, QLineEdit, \
     QHBoxLayout, QFormLayout, QDialog, QTextEdit, QMessageBox, QCheckBox, QComboBox, QFileDialog
 
@@ -159,14 +162,86 @@ QComboBox QAbstractItemView {
     selection-background-color: #3498db;
 }
 '''
+proj_ss = """
+QVBoxLayout {
+    spacing: 10px;
+}
+
+QLabel {
+    font-family: Arial, sans-serif;
+    font-size: 16px; /* Увеличенный размер шрифта */
+}
+
+QLabel#imagelabel {
+    border: 2px solid #cccccc;
+    border-radius: 20px;
+    padding: 5px;
+    background-color: #ffffff;
+}
+
+QLabel#imagelabel QPixmap {
+    border-radius: 20px;
+}
+
+QPushButton {
+    background-color: #FF5733;
+    color: white;
+    padding: 8px 16px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 14px;
+    margin: 4px 2px;
+    cursor: pointer;
+    border-radius: 5px;
+}
+
+QPushButton:hover {
+    background-color: #E64A19;
+}
+
+QPushButton:pressed {
+    background-color: #D84315;
+}
+"""
+
 userpos = None
 pos2lvl = {"Директор": 4,
            "Менеджер": 3,
            "Рабочий": 2,
            "Посетитель": 1}
+eng_to_rus = {
+    "waiting": "Ожидает подтверждения",
+    "approved": "Подтвержден",
+    "denied": "Отклонен"
+}
 host = None
 port = None
 glogin = None
+
+
+def roundCorners(pixmap, radius):
+    rounded = QPixmap(pixmap.size())
+    rounded.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(rounded)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QBrush(pixmap))
+    painter.setPen(Qt.PenStyle.NoPen)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(pixmap.rect()), radius, radius)
+    painter.setClipPath(path)
+    painter.drawPixmap(pixmap.rect(), pixmap)
+    painter.end()
+    return rounded
+
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 class AddProjectBtn(QVBoxLayout):
@@ -185,7 +260,8 @@ class AddProjectBtn(QVBoxLayout):
         self.textlabel.setFont(self.font)
         self.textlabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.textlabel.setFont(QFont())
-        self.add_btn.setMinimumSize(200, 200)
+        self.add_btn.setMinimumSize(135, 135)
+        self.add_btn.setMaximumSize(150, 150)
         self.add_btn.setText('+')
         self.setSpacing(0)
         self.add_btn.clicked.connect(self.add_project)
@@ -195,8 +271,6 @@ class AddProjectBtn(QVBoxLayout):
     def add_project(self):
         self.addpr_widget = AddProjectWidget(self)
         self.addpr_widget.initialize()
-
-    # TODO проверить сохраняемые данные.
 
 
 class ClickableLabel(QLabel):
@@ -432,8 +506,16 @@ class AddProjectWidget(QDialog):
             mbox.setIcon(QMessageBox.Icon.Information)
             mbox.setWindowTitle("Проект успешно создан.")
             mbox.exec()
-            mbox.finished.connect(self.close)
-        self.close()
+            self.close()
+        elif r.status_code == 400:
+            self.input_project_name.setStyleSheet("border: 2px solid red;")
+            self.input_project_name.textChanged.connect(lambda: self.input_project_name.setStyleSheet(""))
+            mbox = QMessageBox()
+            mbox.setText("Проект с выбранным названием уже существует в системе.")
+            mbox.setIcon(QMessageBox.Icon.Information)
+            mbox.setWindowTitle("Проект существует.")
+            mbox.exec()
+            return
 
     def addImage(self):
         filter_string = "Картинки (" + " ".join(self.supported_formats) + ")"
@@ -459,9 +541,12 @@ class MenuCentralWidget(QWidget):
         self.layout = QGridLayout()
         self.pending_users = None
         self.pending_label = None
+        self.pr_layouts = []
         self.projects = []
         self.cur_col = 0
         self.cur_row = 0
+        self.add_project_btn = None
+        self.empty_widgets = []
         self.setLayout(self.layout)
         self.InitUI()
 
@@ -469,23 +554,80 @@ class MenuCentralWidget(QWidget):
         global host, port, glogin
         while True:
             r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
+            if r.status_code != 404:
+                projects = json.loads(r.text)
+                for project in projects:
+                    project_img_r = requests.get(f"http://{host}:{port}/projectimg/{project[1]}")
+                    project_img = project_img_r.content
+                    project.append(project_img)
+                    self.insertProject(project)
             await asyncio.sleep(5)
 
     def InitUI(self):
-        global userpos, pos2lvl
+        global userpos, pos2lvl, glogin
         r = requests.get(f"http://{host}:{port}/getup", json={"login": glogin})
-        if r.status_code != 404:
-            l = json.loads(r.text)
-        else:
-            self.no_project_exsist()
 
+        if r.status_code == 404 and pos2lvl[userpos] == 1:
+            mbox = QMessageBox()
+            mbox.setText("У вас нет доступа к проектам пользователей.")
+            mbox.setIcon(QMessageBox.Icon.Information)
+            mbox.setStandardButtons(QMessageBox.StandardButton.Ok)
+            mbox.setWindowTitle("Нет доступа")
+            mbox.exec()
+            os.abort()
         asyncio.create_task(self.updateProjects())
-        asyncio.create_task(self.UserPingTask())
+        if pos2lvl[userpos] > 2:
+            asyncio.create_task(self.UserPingTask())
+
+        if pos2lvl[userpos] > 1:
+            self.add_project_btn = QWidget()
+            self.add_project_btn.setLayout(AddProjectBtn())
+            self.add_project_btn.setMaximumSize(200, 300)
+            self.layout.addWidget(self.add_project_btn, self.cur_row, self.cur_col,
+                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+        self.addEmptyWidgets()
 
     def insertProject(self, project):
-        if project not in self.projects:
-            self.projects.append(project)
-            self.layout.addWidget()
+        if project[0] not in self.projects:
+            global proj_ss
+            self.projects.append(project[0])
+            pr = Project(project)
+            pwidget = QWidget()
+            pwidget.setLayout(pr)
+            pwidget.setMaximumSize(200, 300)
+            pwidget.setStyleSheet(proj_ss)
+            self.pr_layouts.append([pr.project])
+
+            if self.empty_widgets:
+                empty_widget = self.empty_widgets.pop(0)
+                self.layout.removeWidget(empty_widget)
+                empty_widget.deleteLater()
+
+            self.layout.addWidget(pwidget, self.cur_row, self.cur_col,
+                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.cur_col += 1
+            if self.cur_col >= 5:
+                self.cur_col = 0
+                self.cur_row += 1
+                self.addEmptyWidgets()
+
+            if self.add_project_btn:
+                self.layout.removeWidget(self.add_project_btn)
+                self.layout.addWidget(self.add_project_btn, self.cur_row, self.cur_col,
+                                      alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+    def addEmptyWidgets(self):
+        for _ in range(5):
+            empty_widget = QWidget()
+            empty_widget.setMaximumSize(200, 300)
+            empty_widget.setVisible(False)
+            self.layout.addWidget(empty_widget, self.cur_row, self.cur_col,
+                                  alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            self.empty_widgets.append(empty_widget)
+            self.cur_col += 1
+        self.cur_col = 0
+        self.cur_row += 1
 
     async def UserPingTask(self):
         global host, port, online_users_by_pos
@@ -495,13 +637,103 @@ class MenuCentralWidget(QWidget):
                 online_users_by_pos = json.loads(r.text)
             await asyncio.sleep(5)
 
-    def no_project_exsist(self):
-        self.no_project_widget = QWidget()
-        self.no_projects = AddProjectBtn()
-        self.no_project_widget.setLayout(self.no_projects)
-        self.no_project_widget.setMaximumWidth(210)
-        self.no_project_widget.setMaximumHeight(250)
-        self.layout.addWidget(self.no_project_widget, 0, 0)
+
+class Project(QVBoxLayout):
+    def __init__(self, project):
+        super().__init__()
+        self.project = project
+        self.more_btn = QPushButton("О проекте")
+        self.pixmap = None
+        self.qimage = QImage()
+        self.image = project[-1]
+        self.imagelabel = QLabel()
+        self.imagepixmap = None
+        self.name = QLabel(project[1])
+        self.desc = QLabel(project[2])
+        self.status = project[4]
+        self.initUI()
+
+    def initUI(self):
+        asyncio.create_task(self.selfPingTask())
+        self.qimage.loadFromData(self.image)
+        self.pixmap = QPixmap.fromImage(self.qimage)
+        self.updateImage()
+        self.more_btn.clicked.connect(self.showMore)
+        self.addWidget(self.imagelabel)
+        self.addWidget(self.name)
+        self.addWidget(self.more_btn)
+        self.setSpacing(5)
+
+    def updateImage(self):
+        if self.status == "waiting":
+            grayscale_image = self.pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+            self.pixmap = QPixmap.fromImage(grayscale_image)
+        elif self.status == "approved":
+            self.pixmap = QPixmap.fromImage(self.qimage)
+        target_width = 200
+        target_height = 100
+        if self.pixmap.width() < target_width or self.pixmap.height() < target_height:
+            scaled_pixmap = self.pixmap.scaled(target_width, target_height, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation)
+        else:
+            scaled_pixmap = self.pixmap.scaled(self.imagelabel.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation)
+        self.imagelabel.resize(target_width, target_height)
+        self.imagelabel.setPixmap(roundCorners(scaled_pixmap, 10))
+
+    async def selfPingTask(self):
+        global host, port
+        while True:
+            r = requests.get(f"http://{host}:{port}/GetProjectInfo", json={"id": self.project[0]})
+            if r.status_code == 404:
+                self.imagelabel.setPixmap(QPixmap(resource_path('images/projectdenied.png')))
+                self.project[4] = 'denied'
+                self.status = 'denied'
+                break
+            l = json.loads(r.text)
+            if self.status == 'waiting' and l[4] == 'approved':
+                self.status = 'approved'
+                self.updateImage()
+            await asyncio.sleep(9)
+
+    def showMore(self):
+        info = ProjectInfo(self.project)
+        info.exec()
+
+class Kanban(QWidget):
+    def __init__(self):
+        super().__init__()
+
+
+
+class ProjectInfo(QDialog):
+    def __init__(self, project):
+        super().__init__()
+        self.creator = QLabel()
+        self.status = QLabel(f"Состояние: {eng_to_rus[project[4]]}")
+        self.project = project
+        self.name = QLabel(f"Название: {project[1]}")
+        if not project[2]:
+            self.desc = QLabel(f"Описание отсутствует")
+        else:
+            self.desc = QLabel(f"Описание: {project[2]}")
+        self.lout = QVBoxLayout()
+        self.setLayout(self.lout)
+        self.initUI()
+
+    def initUI(self):
+        global host, port, eng_to_rus
+        self.setWindowTitle("Сведения о проекте")
+        self.status.setWordWrap(True)
+        self.desc.setWordWrap(True)
+        r = requests.get(f"http://{host}:{port}/userid", json={"id": self.project[3]})
+        l = json.loads(r.text)
+        self.creator.setWordWrap(True)
+        self.creator.setText(f"Создатель: {l[4]} {l[1]}, {l[5]}")
+        self.lout.addWidget(self.status)
+        self.lout.addWidget(self.name)
+        self.lout.addWidget(self.desc)
+        self.lout.addWidget(self.creator)
 
 
 class NoServerFound(QDialog):

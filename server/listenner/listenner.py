@@ -7,7 +7,7 @@ import time
 import netifaces
 import requests
 from PyQt6.QtCore import QByteArray, QBuffer
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, send_file
 from threading import Thread
 import sqlite3
 from flask import g
@@ -142,6 +142,7 @@ def create_routes(app):
                 Projects.ProjectID,
                 Projects.ProjectName,
                 Projects.ProjectDesc,
+                Projects.CreatorID,
                 Projects.Status
             FROM 
                 Projects
@@ -150,14 +151,35 @@ def create_routes(app):
             JOIN 
                 Users ON UserProjects.UserID = Users.UserID
             WHERE 
-                Users.SystemLogin = ?
-                AND Projects.Status = 'approved';
+                Users.SystemLogin = ?;
         ''', (login,))
         projects = cursor.fetchall()
         if projects:
             return jsonify(projects), 200
         else:
             return "No projects", 404
+
+    @app.route('/projectimg/<name>', methods=['GET'])
+    def getProjectImage(name):
+        return send_file(f"projects/{name}/{name}.png", mimetype='image/png')
+
+    @app.route("/GetProjectInfo", methods=["GET"])
+    def get_project_info():
+        id = request.json.get("id")
+        cursor = get_db().cursor()
+        cursor.execute('''SELECT * FROM Projects WHERE ProjectID = ?''', (id,))
+        project = cursor.fetchone()
+        print(project)
+        if project is None:
+            return jsonify(project), 404
+        return jsonify(project), 200
+
+    @app.route("/userid", methods=["GET"])
+    def userid():
+        cursor = get_db().cursor()
+        cursor.execute("SELECT * FROM Users WHERE UserID = ?;", (request.json.get("id"),))
+        data = cursor.fetchone()
+        return jsonify(data)
 
     @app.route("/newproject", methods=["POST"])
     def add_project():
@@ -168,12 +190,19 @@ def create_routes(app):
         participants = data.get("participants")
         image = base64.b64decode(data.get("image"))
 
-        with open(f"projects/{name}.png", "wb") as f:
-            f.write(image)
 
         conn = get_db()
         cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM Projects WHERE ProjectName = ?
+        ''', (name,))
+        project_count = cursor.fetchone()[0]
 
+        if project_count > 0:
+            return "Already Exists", 400
+        os.mkdir(f"projects/{name}")
+        with open(f"projects/{name}/{name}.png", "wb") as f:
+            f.write(image)
         cursor.execute('''
             SELECT UserID, Position FROM Users WHERE SystemLogin = ?
         ''', (login,))
