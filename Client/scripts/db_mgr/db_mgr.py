@@ -2,8 +2,6 @@ import ipaddress
 
 import requests
 import socket
-import nmap
-import netifaces as ni
 
 working_ports = [18965, 21761, 50002, 27815]
 host, port = 0, 0

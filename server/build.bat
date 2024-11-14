@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole --add-data "images;images" --manifest manifest/manifest.xml main.py
