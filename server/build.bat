@@ -1,1 +1,1 @@
-pyinstaller --onefile --noconsole --add-data "images;images" --manifest manifest/manifest.xml main.py
+pyinstaller --onefile --noconsole --add-data "images;images" --manifest manifest/manifest.xml --icon=images\icon.ico main.py

@@ -63,12 +63,26 @@ class Server(QMainWindow):
         self.tray = False
 
     def init_ui(self):
-        if not os.path.exists("conf/app.conf"):
+        if not os.path.exists("conf"):
             os.mkdir("conf")
             self.configure_server(None)
         else:
-            self.create_tray_icon_menu()
-            self.run_server()
+            try:
+                with open("conf/app.conf") as f:
+                    a = f.read().split()
+                    if not 1 < len(a) < 3:
+                        self.configure_server()
+                    for el in a:
+                        if el.lower() != 'true' and el.lower() != 'false':
+                            raise ValueError("Conf")
+                    self.create_tray_icon_menu()
+                    self.run_server()
+
+            except (FileNotFoundError, ValueError):
+                os.rmdir("conf")
+                os.mkdir("conf")
+                self.configure_server(None)
+
 
     def minimize_to_tray(self):
         self.tray = True
